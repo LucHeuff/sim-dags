@@ -3,15 +3,33 @@ name = "sim-dags"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "Luc Heuff", email = "10941592+LucHeuff@users.noreply.github.com" }
-]
 requires-python = ">=3.14"
-dependencies = []
+authors = [
+  { name = "Luc Heuff", email = "10941592+LucHeuff@users.noreply.github.com" }
+]
+dependencies = [
+  "pandera[polars]>=0.29.0",
+  "polars>=1.38.1",
+  "pyarrow>=23.0.1",
+  "scipy>=1.17.1",
+  "xarray>=2026.2.0",
+]
 
 [project.scripts]
 sim-dags = "sim_dags:main"
 
+[dependency-groups]
+dev = [
+  "hypothesis>=6.151.9",
+  "pytest>=9.0.2",
+  "pytest-cov>=7.0.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.9.24,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.coverage.run]
+omit = [
+  "*/.local/*",
+]

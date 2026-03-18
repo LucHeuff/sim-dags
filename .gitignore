@@ -5,6 +5,12 @@ build/
 dist/
 wheels/
 *.egg-info
+.coverage
+.hypothesis/
 
 # Virtual environments
 .venv
+uv.lock
+
+# dev files
+**/dev.py
