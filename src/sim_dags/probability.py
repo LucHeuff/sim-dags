@@ -162,6 +162,10 @@ def _grid_approx(
     bayes = stats.binom.pmf(k, n, p) * prior
     density = bayes / np.trapezoid(bayes, p)
 
+    assert_almost_equal(
+        np.trapezoid(density, p), 1, err_msg="Density does not integrate to 1"
+    )
+
     return pl.DataFrame({"p": p, "density": density})
 
 
