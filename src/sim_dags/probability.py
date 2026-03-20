@@ -1,13 +1,17 @@
 from dataclasses import dataclass
-from functools import cache
 from itertools import product
 
+import numpy as np
 import polars as pl
 import xarray as xr
-from attr.filters import include
 from numpy.testing import assert_allclose, assert_almost_equal
+from scipy import stats
 
-from sim_dags.exceptions import VariableDoesNotExistError
+from sim_dags.exceptions import (
+    InvalidGridStepsError,
+    InvalidPriorError,
+    VariableDoesNotExistError,
+)
 
 
 @dataclass
@@ -118,7 +122,7 @@ def p(
 
 
 def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
-    """Calculate probability based on a query.
+    """Calculate probability array based on a query.
 
     Args:
         data: dataset from which probability is to be calculated
@@ -139,5 +143,55 @@ def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
     return p_.to_pandas().set_index(q.variables).to_xarray()[q.name]
 
 
-# TODO grid approximation toevoegen?
+def _grid_approx(
+    k: int, n: int, grid_steps: int, prior: np.ndarray | None
+) -> pl.DataFrame:
+    """Calculate grid approximation with Binomial(n, k)."""
+    assert k <= n, f"n should be smaller than k, got {k = } > {n = }"
+    if grid_steps <= 0:
+        msg = f"Grid steps cannot be less than 0, got {grid_steps}"
+        raise InvalidGridStepsError(msg)
+
+    p = np.linspace(0, 1, grid_steps)
+    prior = stats.uniform.pdf(p) if prior is None else prior
+
+    if (s := prior.shape) != (grid_steps,):
+        msg = f"Prior ({s}) should have the same length as grid ({grid_steps})"
+        raise InvalidPriorError(msg)
+
+    bayes = stats.binom.pmf(k, n, p) * prior
+    density = bayes / np.trapezoid(bayes, p)
+
+    return pl.DataFrame({"p": p, "density": density})
+
+
+# TODO
+def p_grid(
+    data: pl.DataFrame,
+    query: str,
+    grid_steps: int = 100,
+    prior: tuple[float, float] = (1.0, 1.0),
+    *,
+    include_zeros=False,
+) -> pl.DataFrame:
+    """Calculate probability density based on a query.
+
+    Args:
+        data: dataset from which probability is to be calculated
+        query: desired probability, eg. "Y|X, Z"
+        include_zeros (Optional): whether combination that do not appear in
+                      data should also be included
+
+    Returns:
+        polars DataFrame containing probabilities
+
+    Raises:
+        VariableDoesNotExistError if a variable does not appear in the data.
+
+    """
+    q = _parse_query(data, query)
+    counts = _count(data, q)
+    # TODO complete function -> iterate over counts and apply _grid_approx
+
+
 # TODO probability distribution toevoegen?

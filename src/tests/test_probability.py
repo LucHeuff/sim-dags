@@ -8,8 +8,13 @@ import pytest
 import xarray as xr
 from hypothesis import given
 from polars.testing import assert_frame_equal
-from sim_dags.exceptions import VariableDoesNotExistError
-from sim_dags.probability import _get_name, _parse_query, p, p_array
+from scipy import stats
+from sim_dags.exceptions import (
+    InvalidGridStepsError,
+    InvalidPriorError,
+    VariableDoesNotExistError,
+)
+from sim_dags.probability import _get_name, _grid_approx, _parse_query, p, p_array
 from sim_dags.utils import to_df
 
 
@@ -261,3 +266,70 @@ def test_p(s: ProbabilityStrategy) -> None:
     assert len(c := L2(py_zxw, 0.4)) == 0, (
         f"L2 for P(y|z,x,w) over threshold.\n{c!s}"
     )
+
+
+@dataclass
+class GridApproxStrategy:
+    """Container for grid approximation strategy."""
+
+    k: int
+    n: int
+    steps: int
+    prior: np.ndarray | None
+    grid_error: bool
+    prior_error: bool
+    beta: np.ndarray
+
+
+@st.composite
+def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
+    """Strategy for testing grid_approx."""
+    grid_error = draw(st.booleans())
+    # grid_error makes step size invalid, and automatically makes prior size invalid.
+    # So easier to just always have prior_error when grid_error.
+    prior_error = True if grid_error else draw(st.booleans())
+    prior_none = False if prior_error else draw(st.booleans())
+
+    steps = (
+        draw(st.integers(max_value=0))
+        if grid_error
+        else draw(st.integers(100, 1000))
+    )
+    sample_steps = max(steps, 1)
+    n = draw(st.integers(1, 50))
+    k = draw(st.integers(0, max_value=n))
+    if prior_error:
+        prior = np.repeat(0, sample_steps + 10)
+    elif prior_none:
+        prior = None
+    else:
+        prior = np.asarray(
+            draw(
+                st.lists(
+                    st.floats(1, 100), min_size=sample_steps, max_size=sample_steps
+                )
+            )
+        )
+    p = np.linspace(0, 1, sample_steps)
+    beta = stats.beta.pdf(p, 1 + k, 1 + n - k)
+
+    return GridApproxStrategy(k, n, steps, prior, grid_error, prior_error, beta)
+
+
+@given(s=get_grid_approx_strategy())  # ty:ignore[missing-argument]
+def test_grid_approx(s: GridApproxStrategy) -> None:
+    """Test _grid_approx()."""
+    if s.grid_error:
+        with pytest.raises(InvalidGridStepsError):
+            _grid_approx(s.k, s.n, s.steps, s.prior)
+    elif s.prior_error:
+        with pytest.raises(InvalidPriorError):
+            _grid_approx(s.k, s.n, s.steps, s.prior)
+    else:
+        grid = _grid_approx(s.k, s.n, s.steps, s.prior)
+        grid_len = len(grid)
+        assert grid_len == s.steps, f"Expected length {s.steps} but got {grid_len}"
+        if s.prior is None:
+            density = grid["density"].to_numpy()
+            L2 = np.sqrt(np.power(density - s.beta, 2))  # noqa: N806
+            assert L2.mean() <= 0.01, "Density mismatch with Beta distribution"  # noqa: PLR2004
