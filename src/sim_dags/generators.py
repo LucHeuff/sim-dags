@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -73,6 +74,9 @@ def _get_do_x(
     return x_name, schema, px
 
 
+GenerateFunction = Callable[[int, SimpleDAGParams], pl.DataFrame]
+
+
 def generate_pipe(
     size: int, params: SimpleDAGParams, *, do_x: bool = False
 ) -> pl.DataFrame:
@@ -116,7 +120,7 @@ def generate_collider(
 
     x = rng.choice(params.nx, p=px, size=size)
     y = rng.binomial(n=1, p=params.py_x[x])
-    z = rng.multinomial(n=1, pvals=params.pz_xy[x, y]).argmax(axis=1)
+    z = rng.multinomial(1, pvals=params.pz_xy[x, y]).argmax(axis=1)
     df = pl.DataFrame({x_name: x, "z": z, "y": y})
     schema.validate(df)
     return df
