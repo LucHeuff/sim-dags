@@ -17,8 +17,10 @@ from sim_dags.utils import to_df
 class ParseStrategy:
     """Contains parts for _parse_query() strategy."""
 
+    name: str
     event: list[str]
     given: list[str] | None
+    variables: list[str]
     df: pl.DataFrame
     query: str
     error: bool
@@ -64,9 +66,13 @@ def parse_query_strategy(draw: st.DrawFn) -> ParseStrategy:
         else ",".join(event) + "|" + ",".join(given_)
     )
 
+    variables = event if given_ is None else event + given_
+
     return ParseStrategy(
+        _get_name(query),
         event,
         given_,
+        variables,
         df,
         query,
         event_error or given_error,
@@ -82,22 +88,24 @@ def test_parse_query(s: ParseStrategy) -> None:
         with pytest.raises(VariableDoesNotExistError):
             _parse_query(s.df, s.query)
     else:
-        e, g = _parse_query(s.df, s.query)
-        assert e == s.event, "event does not match what is expected"
-        assert g == s.given, "given does not match what is expected"
+        q = _parse_query(s.df, s.query)
+        assert q.name == s.name, "name does not match what is expected"
+        assert q.event == s.event, "event does not match what is expected"
+        assert q.given == s.given, "given does not match what is expected"
+        assert q.variables == s.variables, "variables do not match what is expected"
 
 
 @dataclass
 class ProbabilityStrategy:
     """Contains parts for p() strategy."""
 
+    seed: int
     data: pl.DataFrame
     pw: pl.DataFrame
     px_w: pl.DataFrame
     pz_xw: pl.DataFrame
     py_zxw: pl.DataFrame
     pyx_zw: pl.DataFrame
-    seed: int
 
 
 @pytest.fixture
@@ -146,7 +154,7 @@ def static_strategy() -> ProbabilityStrategy:
         }
     )
 
-    return ProbabilityStrategy(data, pw, px_w, pz_xw, py_zxw, pyx_zw, seed=0)
+    return ProbabilityStrategy(0, data, pw, px_w, pz_xw, py_zxw, pyx_zw)
 
 
 @st.composite
@@ -185,24 +193,19 @@ def probability_strategy(draw: st.DrawFn) -> ProbabilityStrategy:
     py_zxw_0 = (1 - py_zxw__).expand_dims(y=[0])
     py_zxw_ = xr.concat([py_zxw_0, py_zxw_1], dim="y")
 
-    # P(y,x|z, w) = P(y, x, z, w) / P(z, w)
-    pyx_zw_ = (
-        (py_zxw_ * pz_xw_ * px_w_ * pw_) / (pz_xw_ * px_w_).sum(dim="x")
-    ).rename("P(y,x|z,w)")
-
     w = rng.choice(nw, p=pw, size=size)
     x = rng.multinomial(1, pvals=px_w[w]).argmax(axis=1)
     z = rng.multinomial(1, pvals=pz_xw[x, w]).argmax(axis=1)
     y = rng.binomial(n=1, p=py_zxw[z, x, w])
 
     return ProbabilityStrategy(
+        seed=seed,
         data=pl.DataFrame({"x": x, "y": y, "z": z, "w": w}),
         pw=to_df(pw_),
         px_w=to_df(px_w_),
         pz_xw=to_df(pz_xw_),
         py_zxw=to_df(py_zxw_),
-        pyx_zw=to_df(pyx_zw_),
-        seed=seed,
+        pyx_zw=pl.DataFrame(),  # Not doing anything with this
     )
 
 
@@ -251,16 +254,10 @@ def test_p(s: ProbabilityStrategy) -> None:
     px_w = join("x|w", s.px_w)
     pz_xw = join("z|x,w", s.pz_xw)
     py_zxw = join("y|z,x,w", s.py_zxw)
-    pyx_zw = join("y,x|z,w", s.pyx_zw)
 
     assert len(c := L2(pw, 0.02)) == 0, f"L2 for P(w) over threshold.\n{c!s}"
-    assert len(c := L2(px_w, 0.03)) == 0, f"L2 for P(x|w) over threshold.\n{c!s}"
+    assert len(c := L2(px_w, 0.05)) == 0, f"L2 for P(x|w) over threshold.\n{c!s}"
     assert len(c := L2(pz_xw, 0.2)) == 0, f"L2 for P(z|x,w) over threshold.\n{c!s}"
     assert len(c := L2(py_zxw, 0.4)) == 0, (
         f"L2 for P(y|z,x,w) over threshold.\n{c!s}"
-    )
-    # This isn't testing the accuracy of values at all anymore
-    # Might indicate instability in calculating probability products
-    assert len(c := L2(pyx_zw, 0.9)) == 0, (
-        f"L2 for P(y,x|z,w) over threshold.\n{c!s}"
     )

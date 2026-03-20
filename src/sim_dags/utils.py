@@ -24,7 +24,7 @@ LEGEND_LABELS = 15
 TITLE = 18
 
 
-def default_chart_config(chart: Chart) -> Chart:
+def default_chart_config(chart: Chart) -> Chart:  # pragma: no cover
     """Apply default configuration to a chart."""
     return (
         chart.configure_axis(grid=False)

@@ -1,20 +1,33 @@
+from dataclasses import dataclass
+from functools import cache
 from itertools import product
 
 import polars as pl
 import xarray as xr
+from attr.filters import include
 from numpy.testing import assert_allclose, assert_almost_equal
 
 from sim_dags.exceptions import VariableDoesNotExistError
 
 
-def _get_name(query: str) -> str:  # pragma: no cover
+@dataclass
+class QueryParts:
+    """Relevant parts of a query."""
+
+    name: str
+    event: list[str]
+    given: list[str] | None
+    variables: list[str]
+
+
+def _get_name(query: str) -> str:
     return f"P({query})"
 
 
-def _parse_query(
-    data: pl.DataFrame, query: str
-) -> tuple[list[str], list[str] | None]:
+def _parse_query(data: pl.DataFrame, query: str) -> QueryParts:
     """Parse query to relevant parts and perform checks with data."""
+    name = _get_name(query)
+
     if "|" not in query:
         e, g = query, None
     else:
@@ -29,7 +42,56 @@ def _parse_query(
         msg = f"Variables {miss} do not appear in data."
         raise VariableDoesNotExistError(msg)
 
-    return event, given
+    return QueryParts(name, event, given, variables)
+
+
+def _count(data: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
+    """Count number of occurrences of event and given if applicable."""
+    if q.given is None:
+        return (
+            data.group_by(q.event).agg(k=pl.len()).with_columns(n=pl.lit(len(data)))
+        )
+    return (
+        data.group_by(q.variables)
+        .agg(k=pl.len())
+        .with_columns(n=pl.col("k").sum().over(q.given))
+    )
+
+
+def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFrame:
+    """Calculate probability from a query."""
+    df = _count(data, q).with_columns(p=pl.col("k") / pl.col("n"))
+
+    # --- Sanity checks
+    if q.given is None:
+        # sum of all probabilities should be (almost) 1
+        _sum = df.select(pl.col("p").sum()).item()
+        assert_almost_equal(_sum, 1, err_msg="Probabilities do not add to 1")
+
+    else:
+        # Probabilities in each group should add to (almost) 1
+        _sum = (
+            df.group_by(q.given)
+            .agg(pl.col("p").sum())
+            .select(pl.col("p"))
+            .to_numpy()
+        )
+        assert_allclose(_sum, 1, err_msg="Probabilities do not add to 1")
+
+    if include_zeros:
+        # Getting all possible permutations of the values in the selected variables
+        permutations = list(
+            product(*[df[var].unique().to_list() for var in q.variables])
+        )
+        perm = pl.DataFrame(
+            [dict(zip(q.variables, per, strict=True)) for per in permutations]
+        )
+
+        df = perm.join(df, on=q.variables, how="left").with_columns(
+            pl.col("p").fill_null(0)
+        )
+
+    return df.select([*q.variables, "p"]).rename({"p": q.name}).sort(q.variables)
 
 
 def p(
@@ -50,43 +112,9 @@ def p(
         VariableDoesNotExistError if a variable does not appear in the data.
 
     """
-    name = _get_name(query)
-    event, given = _parse_query(data, query)
-    variables = event + given if given is not None else event
+    q = _parse_query(data, query)
 
-    if given is None:
-        df = data.group_by(event).agg(p=pl.len() / len(data))
-        # Sanity check: sum of all probabilities should be (almost) 1
-        sum_ = df.select(pl.col("p").sum()).item()
-        assert_almost_equal(sum_, 1, err_msg="Probabilities do not add to 1")
-
-    else:
-        df = (
-            data.group_by(variables)
-            .agg(n=pl.len())
-            .with_columns(p=pl.col("n") / pl.col("n").sum().over(given))
-        )
-
-        sum_ = (
-            df.group_by(given).agg(pl.col("p").sum()).select(pl.col("p")).to_numpy()
-        )
-
-        assert_allclose(sum_, 1, err_msg="Probabilities do not add to 1")
-
-    if include_zeros:
-        # Getting all possible permutations of the values in the selected variables
-        permutations = list(
-            product(*[df[var].unique().to_list() for var in variables])
-        )
-        perm = pl.DataFrame(
-            [dict(zip(variables, per, strict=True)) for per in permutations]
-        )
-
-        df = perm.join(df, on=variables, how="left").with_columns(
-            pl.col("p").fill_null(0)
-        )
-
-    return df.select([*variables, "p"]).rename({"p": name}).sort(variables)
+    return _p(data, q, include_zeros=include_zeros)
 
 
 def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
@@ -103,13 +131,12 @@ def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
         VariableDoesNotExistError if a variable does not appear in the data.
 
     """
-    name = _get_name(query)
+    q = _parse_query(data, query)
     # Conversion using pandas,
     # since that makes sure the values end up in the right place
-    p_ = p(data, query, include_zeros=True)
-    variables = [col for col in p_.columns if col != name]
+    p_ = _p(data, q, include_zeros=True)
     # Also my first successful application of a MultiIndex
-    return p_.to_pandas().set_index(variables).to_xarray()[name]
+    return p_.to_pandas().set_index(q.variables).to_xarray()[q.name]
 
 
 # TODO grid approximation toevoegen?
