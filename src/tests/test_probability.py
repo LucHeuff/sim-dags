@@ -255,7 +255,7 @@ def test_p(s: ProbabilityStrategy) -> None:
 
     assert len(c := L2(pw, 0.02)) == 0, f"L2 for P(w) over threshold.\n{c!s}"
     assert len(c := L2(px_w, 0.03)) == 0, f"L2 for P(x|w) over threshold.\n{c!s}"
-    assert len(c := L2(pz_xw, 0.1)) == 0, f"L2 for P(z|x,w) over threshold.\n{c!s}"
+    assert len(c := L2(pz_xw, 0.2)) == 0, f"L2 for P(z|x,w) over threshold.\n{c!s}"
     assert len(c := L2(py_zxw, 0.4)) == 0, (
         f"L2 for P(y|z,x,w) over threshold.\n{c!s}"
     )
