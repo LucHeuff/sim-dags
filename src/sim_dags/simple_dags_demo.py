@@ -18,7 +18,7 @@ subprocess.run(["clear"], shell=True, check=True)
 SEED = 12345
 NZ = 4
 NX = 3
-N_SIZES = 6
+N_SIZES = 5
 N_SEEDS = 15
 
 SUM_ = "∑z P(y|x,z)P(z)"
@@ -39,8 +39,8 @@ def compare_estimands(
 
     def get_sim(size: int, seed: int) -> pl.DataFrame:
         params = SimpleDAGParams(seed, nz, nx)
-        sim = gen(size, params)
-        do_sim = gen(size, params, do_x=True)
+        sim = gen(size, params, seed=1)
+        do_sim = gen(size, params, seed=1, do_x=True)
 
         py_x = p(sim, "y|x")
         py_do_x = p(do_sim, "y|do(x)").rename({"do(x)": "x"})
@@ -108,19 +108,19 @@ def compare_dags() -> None:
     """Runner function combining comparison for all the DAGs."""
     pipe_chart = compare_estimands(
         generate_pipe,
-        title="Comparison for pipe DAG",
+        title="Comparison for pipe DAG (correct: P(y|x))",
         n_sizes=N_SIZES,
         n_seeds=N_SEEDS,
     )
     fork_chart = compare_estimands(
         generate_fork,
-        title="Comparison for fork DAG",
+        title="Comparison for fork DAG (correct: ∑z P(y|x,z)P(z))",
         n_sizes=N_SIZES,
         n_seeds=N_SEEDS,
     )
     collider_chart = compare_estimands(
         generate_collider,
-        title="Comparison for collider DAG",
+        title="Comparison for collider DAG (correct: P(y|x))",
         n_sizes=N_SIZES,
         n_seeds=N_SEEDS,
     )
@@ -132,3 +132,4 @@ def compare_dags() -> None:
 
 if __name__ == "__main__":
     compare_dags()
+    print("=== Klaar ====")  # noqa: T201
