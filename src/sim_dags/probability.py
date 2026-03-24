@@ -176,6 +176,34 @@ def _grid_approx(
     return pl.DataFrame({"p": p, "density": density})
 
 
+def _p_grid(
+    data: pl.DataFrame,
+    q: QueryParts,
+    grid_steps: int,
+    prior: np.ndarray | None,
+    *,
+    include_zeros: bool,
+) -> pl.DataFrame:
+    """Calculate probability grid from a query."""
+    counts = _count(data, q)
+    if include_zeros:
+        # Adding all possible permutations and setting k=0 and n=0 when no counts
+        counts = (
+            _permutations(counts, q)
+            .join(counts, on=q.variables, how="left")
+            .with_columns(pl.col("k").fill_null(0), pl.col("n").fill_null(0))
+        )
+
+    def approx_count(d: dict) -> pl.DataFrame:
+        k = d.pop("k")
+        n = d.pop("n")
+        return _grid_approx(k, n, grid_steps, prior).with_columns(
+            **{key: pl.lit(d[key]) for key in d}
+        )
+
+    return pl.concat([approx_count(d) for d in counts.to_dicts()])
+
+
 def p_grid(
     data: pl.DataFrame,
     query: str,
@@ -206,23 +234,45 @@ def p_grid(
 
     """
     q = _parse_query(data, query)
-    counts = _count(data, q)
-    if include_zeros:
-        # Adding all possible permutations and setting k=0 and n=0 when no counts
-        counts = (
-            _permutations(counts, q)
-            .join(counts, on=q.variables, how="left")
-            .with_columns(pl.col("k").fill_null(0), pl.col("n").fill_null(0))
-        )
-
-    def approx_count(d: dict) -> pl.DataFrame:
-        k = d.pop("k")
-        n = d.pop("n")
-        return _grid_approx(k, n, grid_steps, prior).with_columns(
-            **{key: pl.lit(d[key]) for key in d}
-        )
-
-    return pl.concat([approx_count(d) for d in counts.to_dicts()])
+    return _p_grid(data, q, grid_steps, prior, include_zeros=include_zeros)
 
 
-# TODO probability distribution toevoegen?
+def p_grid_array(
+    data: pl.DataFrame,
+    query: str,
+    grid_steps: int = 100,
+    prior: np.ndarray | None = None,
+) -> xr.DataArray:
+    """Calculate probability density based on a query, and return as DataArray.
+
+    Args:
+        data: dataset from which probability is to be calculated
+        query: desired probability, eg. "Y|X, Z"
+        grid_steps: number of steps in grid approximation
+        prior (Optional): prior distribution for grid approximation.
+                        Should be of the same lenght as grid_steps.
+                        Defaults to a uniform distribution.
+        include_zeros (Optional): whether combination that do not appear in
+                      data should also be included
+
+    Returns:
+        polars DataFrame containing probabilities
+
+    Raises:
+        VariableDoesNotExistError if a variable does not appear in the data.
+        InvalidGridStepsError if the number of grid steps is 0 or less
+        InvalidPriorError if the prior has a different length from grid_steps
+
+    """
+    q = _parse_query(data, query)
+    grid = _p_grid(data, q, grid_steps, prior, include_zeros=True)
+
+    return (
+        grid.to_pandas()
+        .set_index([*q.variables, "p"])
+        .to_xarray()["density"]
+        .rename(q.name)
+    )
+
+
+# TODO Log distributions?

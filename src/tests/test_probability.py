@@ -24,6 +24,7 @@ from sim_dags.probability import (
     p,
     p_array,
     p_grid,
+    p_grid_array,
 )
 from sim_dags.utils import to_df
 
@@ -351,4 +352,62 @@ def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
     with pytest.raises(InvalidPriorError):
         p_grid(s.data, "w", grid_steps=150, prior=np.repeat(5, 50))
 
-    # TODO test errors
+
+def test_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
+    """Test p_grid_array()."""
+    s = static_strategy
+
+    def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
+        q = _parse_query(s.data, query)
+        grid = to_df(p_grid_array(s.data, query, grid_steps))
+        test = (
+            grid.with_columns(
+                (pl.col(q.name) == pl.col(q.name).max())
+                .over(q.variables)
+                .alias("max"),
+                # When all variables are equal to the max,
+                # these are the uniform prior, meaning this combination
+                # did not appear in the data.
+                (pl.col(q.name) == pl.col(q.name).max())
+                .all()
+                .over(q.variables)
+                .alias("all_max"),
+            )
+            .filter(pl.col("max") & pl.col("all_max").not_())
+            .select([*q.variables, "p"])
+            .rename({"p": q.name})
+        )
+
+        assert grid.select(pl.col("p").n_unique()).item() == grid_steps, (
+            "Incorrect grid steps."
+        )
+        assert_frame_equal(
+            test,
+            true,
+            check_exact=False,
+            check_row_order=False,
+            check_dtypes=False,
+            abs_tol=0.1,
+        )
+
+    # Testing grid outputs
+    test_grid("w", s.pw, 70)
+    test_grid("x|w", s.px_w, 100)
+    test_grid("z|x,w", s.pz_xw, 135)
+    test_grid("y|z,x,w", s.py_zxw, 205)
+    test_grid("y,x|z,w", s.pyx_zw, 300)
+
+    # Testing custom prior
+    steps = 100
+    grid = p_grid_array(s.data, "w", grid_steps=steps, prior=np.linspace(0, 10, 100))
+    assert to_df(grid).select(pl.col("p").n_unique()).item() == steps, (
+        "Incorrect grid steps."
+    )
+
+    # Testing errors
+    with pytest.raises(VariableDoesNotExistError):
+        p_grid_array(s.data, "f")
+    with pytest.raises(InvalidGridStepsError):
+        p_grid_array(s.data, "w", -1)
+    with pytest.raises(InvalidPriorError):
+        p_grid_array(s.data, "w", grid_steps=150, prior=np.repeat(5, 50))
