@@ -329,7 +329,7 @@ def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
         grid = p_grid(s.data, query, grid_steps)
         test = (
             grid.with_columns(
-                (pl.col("density") == pl.col("density").max())
+                (pl.col(q.name) == pl.col(q.name).max())
                 .over(q.variables)
                 .alias("max")
             )
@@ -400,7 +400,7 @@ def test_log_p_grid(static_strategy: ProbabilityStrategy) -> None:
         q = _parse_query(s.data, query)
         grid = log_p_grid(s.data, query, grid_steps)
         test = (
-            grid.with_columns(density=pl.col("log_density").exp())
+            grid.with_columns(density=pl.col(f"log {q.name}").exp())
             .with_columns(
                 (pl.col("density") == pl.col("density").max())
                 .over(q.variables)

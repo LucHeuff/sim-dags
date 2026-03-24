@@ -280,7 +280,9 @@ def p_grid(
 
     """
     q = _parse_query(data, query)
-    return _p_grid(data, q, grid_steps, prior, include_zeros=include_zeros)
+    return _p_grid(data, q, grid_steps, prior, include_zeros=include_zeros).rename(
+        {"density": q.name}
+    )
 
 
 def log_p_grid(
@@ -316,7 +318,7 @@ def log_p_grid(
     q = _parse_query(data, query)
     return _p_grid(
         data, q, grid_steps, log_prior, include_zeros=include_zeros, log=True
-    )
+    ).rename({"log_density": f"log {q.name}"})
 
 
 def p_grid_array(
