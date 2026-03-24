@@ -11,7 +11,8 @@ from polars.testing import assert_frame_equal
 from scipy import stats
 from sim_dags.exceptions import (
     InvalidGridStepsError,
-    InvalidPriorError,
+    InvalidPriorDistributionError,
+    InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
 from sim_dags.probability import (
@@ -19,8 +20,11 @@ from sim_dags.probability import (
     _count,
     _get_name,
     _grid_approx,
+    _log_grid_approx,
     _parse_query,
     _permutations,
+    log_p_grid,
+    log_p_grid_array,
     p,
     p_array,
     p_grid,
@@ -224,9 +228,11 @@ class GridApproxStrategy:
     n: int
     steps: int
     prior: np.ndarray | None
+    log_prior: np.ndarray | None
     grid_error: bool
     prior_error: bool
     beta: np.ndarray
+    log_beta: np.ndarray
 
 
 @st.composite
@@ -248,8 +254,10 @@ def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
     k = draw(st.integers(0, max_value=n))
     if prior_error:
         prior = np.repeat(0, sample_steps + 10)
+        log_prior = prior
     elif prior_none:
         prior = None
+        log_prior = None
     else:
         prior = np.asarray(
             draw(
@@ -258,10 +266,20 @@ def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
                 )
             )
         )
+        log_prior = np.asarray(
+            draw(
+                st.lists(
+                    st.floats(-100, 0), min_size=sample_steps, max_size=sample_steps
+                )
+            )
+        )
     p = np.linspace(0, 1, sample_steps)
     beta = stats.beta.pdf(p, 1 + k, 1 + n - k)
+    log_beta = stats.beta.logpdf(p, 1 + k, 1 + n - k)
 
-    return GridApproxStrategy(k, n, steps, prior, grid_error, prior_error, beta)
+    return GridApproxStrategy(
+        k, n, steps, prior, log_prior, grid_error, prior_error, beta, log_beta
+    )
 
 
 @given(s=get_grid_approx_strategy())  # ty:ignore[missing-argument]
@@ -271,7 +289,7 @@ def test_grid_approx(s: GridApproxStrategy) -> None:
         with pytest.raises(InvalidGridStepsError):
             _grid_approx(s.k, s.n, s.steps, s.prior)
     elif s.prior_error:
-        with pytest.raises(InvalidPriorError):
+        with pytest.raises(InvalidPriorShapeError):
             _grid_approx(s.k, s.n, s.steps, s.prior)
     else:
         grid = _grid_approx(s.k, s.n, s.steps, s.prior)
@@ -281,6 +299,25 @@ def test_grid_approx(s: GridApproxStrategy) -> None:
             density = grid["density"].to_numpy()
             L2 = np.sqrt(np.power(density - s.beta, 2))  # noqa: N806
             assert L2.mean() <= 0.011, "Density mismatch with Beta distribution"  # noqa: PLR2004
+
+
+@given(s=get_grid_approx_strategy())  # ty:ignore[missing-argument]
+def test_log_grid_approx(s: GridApproxStrategy) -> None:
+    """Test _log_grid_approx()."""
+    if s.grid_error:
+        with pytest.raises(InvalidGridStepsError):
+            _log_grid_approx(s.k, s.n, s.steps, s.log_prior)
+    elif s.prior_error:
+        with pytest.raises(InvalidPriorShapeError):
+            _log_grid_approx(s.k, s.n, s.steps, s.log_prior)
+    else:
+        grid = _log_grid_approx(s.k, s.n, s.steps, s.log_prior)
+        grid_len = len(grid)
+        assert grid_len == s.steps, f"Expected length {s.steps} but got {grid_len}"
+        if s.log_prior is None:
+            density = grid["log_density"].to_numpy()
+            L2 = np.sqrt(np.power(density - s.log_beta, 2))  # noqa: N806
+            assert np.nanmean(L2) <= 0.1, "Density mismatch with Beta distribution"  # noqa: PLR2004
 
 
 def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
@@ -349,8 +386,85 @@ def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
         p_grid(s.data, "f")
     with pytest.raises(InvalidGridStepsError):
         p_grid(s.data, "w", -1)
-    with pytest.raises(InvalidPriorError):
+    with pytest.raises(InvalidPriorShapeError):
         p_grid(s.data, "w", grid_steps=150, prior=np.repeat(5, 50))
+    with pytest.raises(InvalidPriorDistributionError):
+        p_grid(s.data, "w", grid_steps=50, prior=np.repeat(-5, 50))
+
+
+def test_log_p_grid(static_strategy: ProbabilityStrategy) -> None:
+    """Test p_grid()."""
+    s = static_strategy
+
+    def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
+        q = _parse_query(s.data, query)
+        grid = log_p_grid(s.data, query, grid_steps)
+        test = (
+            grid.with_columns(density=pl.col("log_density").exp())
+            .with_columns(
+                (pl.col("density") == pl.col("density").max())
+                .over(q.variables)
+                .alias("max")
+            )
+            .filter(pl.col("max"))
+            .select([*q.variables, "p"])
+            .rename({"p": q.name})
+        )
+
+        assert grid.select(pl.col("p").n_unique()).item() == grid_steps, (
+            "Incorrect grid steps."
+        )
+        assert_frame_equal(
+            test,
+            true,
+            check_exact=False,
+            check_row_order=False,
+            check_dtypes=False,
+            abs_tol=0.1,
+        )
+
+    # Testing grid outputs
+    test_grid("w", s.pw, 70)
+    test_grid("x|w", s.px_w, 101)
+    test_grid("z|x,w", s.pz_xw, 135)
+    test_grid("y|z,x,w", s.py_zxw, 205)
+    test_grid("y,x|z,w", s.pyx_zw, 300)
+
+    # Testing custom prior
+    steps = 100
+    grid = log_p_grid(
+        s.data, "w", grid_steps=steps, log_prior=np.linspace(-10, 0, 100)
+    )
+    assert grid.select(pl.col("p").n_unique()).item() == steps, (
+        "Incorrect grid steps."
+    )
+
+    # Testing include_zeros
+    q = _parse_query(s.data, "y,x|z,w")
+    perms = _permutations(_count(s.data, q), q)
+
+    grid_perms = (
+        log_p_grid(s.data, "y,x|z,w", include_zeros=True)
+        .select(["y", "x", "z", "w"])
+        .unique()
+    )
+    assert_frame_equal(
+        grid_perms,
+        perms,
+        check_row_order=False,
+        check_column_order=False,
+        check_dtypes=False,
+    )
+
+    # Testing errors
+    with pytest.raises(VariableDoesNotExistError):
+        log_p_grid(s.data, "f")
+    with pytest.raises(InvalidGridStepsError):
+        log_p_grid(s.data, "w", -1)
+    with pytest.raises(InvalidPriorShapeError):
+        log_p_grid(s.data, "w", grid_steps=150, log_prior=np.repeat(0, 50))
+    with pytest.raises(InvalidPriorDistributionError):
+        log_p_grid(s.data, "w", grid_steps=50, log_prior=np.repeat(5, 50))
 
 
 def test_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
@@ -409,5 +523,71 @@ def test_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
         p_grid_array(s.data, "f")
     with pytest.raises(InvalidGridStepsError):
         p_grid_array(s.data, "w", -1)
-    with pytest.raises(InvalidPriorError):
+    with pytest.raises(InvalidPriorShapeError):
         p_grid_array(s.data, "w", grid_steps=150, prior=np.repeat(5, 50))
+    with pytest.raises(InvalidPriorDistributionError):
+        p_grid(s.data, "w", grid_steps=50, prior=np.repeat(-5, 50))
+
+
+def test_log_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
+    """Test log_p_grid_array()."""
+    s = static_strategy
+
+    def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
+        q = _parse_query(s.data, query)
+        grid = to_df(log_p_grid_array(s.data, query, grid_steps))
+        test = (
+            grid.with_columns(
+                (pl.col(f"log {q.name}") == pl.col(f"log {q.name}").max())
+                .over(q.variables)
+                .alias("max"),
+                # When all variables are equal to the max,
+                # these are the uniform prior, meaning this combination
+                # did not appear in the data.
+                (pl.col(f"log {q.name}") == pl.col(f"log {q.name}").max())
+                .all()
+                .over(q.variables)
+                .alias("all_max"),
+            )
+            .filter(pl.col("max") & pl.col("all_max").not_())
+            .select([*q.variables, "p"])
+            .rename({"p": q.name})
+        )
+
+        assert grid.select(pl.col("p").n_unique()).item() == grid_steps, (
+            "Incorrect grid steps."
+        )
+        assert_frame_equal(
+            test,
+            true,
+            check_exact=False,
+            check_row_order=False,
+            check_dtypes=False,
+            abs_tol=0.1,
+        )
+
+    # Testing grid outputs
+    test_grid("w", s.pw, 70)
+    test_grid("x|w", s.px_w, 101)
+    test_grid("z|x,w", s.pz_xw, 135)
+    test_grid("y|z,x,w", s.py_zxw, 205)
+    test_grid("y,x|z,w", s.pyx_zw, 300)
+
+    # Testing custom prior
+    steps = 100
+    grid = log_p_grid_array(
+        s.data, "w", grid_steps=steps, log_prior=np.linspace(-10, 0, 100)
+    )
+    assert to_df(grid).select(pl.col("p").n_unique()).item() == steps, (
+        "Incorrect grid steps."
+    )
+
+    # Testing errors
+    with pytest.raises(VariableDoesNotExistError):
+        log_p_grid_array(s.data, "f")
+    with pytest.raises(InvalidGridStepsError):
+        log_p_grid_array(s.data, "w", -1)
+    with pytest.raises(InvalidPriorShapeError):
+        log_p_grid_array(s.data, "w", grid_steps=150, log_prior=np.repeat(-5, 50))
+    with pytest.raises(InvalidPriorDistributionError):
+        log_p_grid(s.data, "w", grid_steps=50, log_prior=np.repeat(5, 50))

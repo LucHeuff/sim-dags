@@ -6,10 +6,12 @@ import polars as pl
 import xarray as xr
 from numpy.testing import assert_allclose, assert_almost_equal
 from scipy import stats
+from scipy.special import logsumexp
 
 from sim_dags.exceptions import (
     InvalidGridStepsError,
-    InvalidPriorError,
+    InvalidPriorDistributionError,
+    InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
 
@@ -164,7 +166,11 @@ def _grid_approx(
 
     if (s := prior.shape) != (grid_steps,):
         msg = f"Prior ({s}) should have the same length as grid ({grid_steps})"
-        raise InvalidPriorError(msg)
+        raise InvalidPriorShapeError(msg)
+
+    if prior.min() < 0:
+        msg = "Prior has values below zero, but it should be strictly positive."
+        raise InvalidPriorDistributionError(msg)
 
     bayes = stats.binom.pmf(k, n, p) * prior
     density = bayes / np.trapezoid(bayes, p)
@@ -176,6 +182,41 @@ def _grid_approx(
     return pl.DataFrame({"p": p, "density": density})
 
 
+def _log_grid_approx(
+    k: int, n: int, grid_steps: int, log_prior: np.ndarray | None
+) -> pl.DataFrame:
+    """Calculate grid approximation with Binomial(n, k) on the log scale."""
+    assert k <= n, f"n should be smaller than k, got {k = } > {n = }"
+    if grid_steps <= 0:
+        msg = f"Grid steps cannot be less than 0, got {grid_steps}"
+        raise InvalidGridStepsError(msg)
+
+    p = np.linspace(0, 1, grid_steps)
+    step = p[1] - p[0]  # required for normalisation step
+
+    log_prior = stats.uniform.logpdf(p) if log_prior is None else log_prior
+    if (s := log_prior.shape) != (grid_steps,):
+        msg = f"Prior ({s}) should have the same length as grid ({grid_steps})"
+        raise InvalidPriorShapeError(msg)
+
+    if log_prior.max() > 0:
+        msg = "Prior has values above zero, but it should in [0, ∞) ."
+        raise InvalidPriorDistributionError(msg)
+
+    bayes = stats.binom.logpmf(k, n, p=p) + log_prior
+    density = bayes - (logsumexp(bayes) + np.log(step))
+
+    assert_almost_equal(
+        # Integrating on the regular scale, so need to exp the density
+        np.trapezoid(np.exp(density), p),
+        1,
+        decimal=1,
+        err_msg="Density does not integerate to 1",
+    )
+
+    return pl.DataFrame({"p": p, "log_density": density})
+
+
 def _p_grid(
     data: pl.DataFrame,
     q: QueryParts,
@@ -183,6 +224,7 @@ def _p_grid(
     prior: np.ndarray | None,
     *,
     include_zeros: bool,
+    log: bool = False,
 ) -> pl.DataFrame:
     """Calculate probability grid from a query."""
     counts = _count(data, q)
@@ -194,10 +236,13 @@ def _p_grid(
             .with_columns(pl.col("k").fill_null(0), pl.col("n").fill_null(0))
         )
 
+    # Determining on which scale the results should be
+    approx = _log_grid_approx if log else _grid_approx
+
     def approx_count(d: dict) -> pl.DataFrame:
         k = d.pop("k")
         n = d.pop("n")
-        return _grid_approx(k, n, grid_steps, prior).with_columns(
+        return approx(k, n, grid_steps, prior).with_columns(
             **{key: pl.lit(d[key]) for key in d}
         )
 
@@ -230,11 +275,48 @@ def p_grid(
     Raises:
         VariableDoesNotExistError if a variable does not appear in the data.
         InvalidGridStepsError if the number of grid steps is 0 or less
-        InvalidPriorError if the prior has a different length from grid_steps
+        InvalidPriorShapeError if the prior has a different length from grid_steps
+        InvalidPriorDistributionError if the prior has values below zero
 
     """
     q = _parse_query(data, query)
     return _p_grid(data, q, grid_steps, prior, include_zeros=include_zeros)
+
+
+def log_p_grid(
+    data: pl.DataFrame,
+    query: str,
+    grid_steps: int = 100,
+    log_prior: np.ndarray | None = None,
+    *,
+    include_zeros: bool = False,
+) -> pl.DataFrame:
+    """Calculate probability density based on a query.
+
+    Args:
+        data: dataset from which probability is to be calculated
+        query: desired probability, eg. "Y|X, Z"
+        grid_steps: number of steps in grid approximation
+        log_prior (Optional): prior distribution on the log scale for grid approximation.
+                        Should be of the same lenght as grid_steps.
+                        Defaults to a uniform distribution.
+        include_zeros (Optional): whether combination that do not appear in
+                      data should also be included
+
+    Returns:
+        polars DataFrame containing probabilities
+
+    Raises:
+        VariableDoesNotExistError if a variable does not appear in the data.
+        InvalidGridStepsError if the number of grid steps is 0 or less
+        InvalidPriorShapeError if the prior has a different length from grid_steps
+        InvalidPriorDistributionError if the prior has values above zero
+
+    """  # noqa: E501
+    q = _parse_query(data, query)
+    return _p_grid(
+        data, q, grid_steps, log_prior, include_zeros=include_zeros, log=True
+    )
 
 
 def p_grid_array(
@@ -261,7 +343,8 @@ def p_grid_array(
     Raises:
         VariableDoesNotExistError if a variable does not appear in the data.
         InvalidGridStepsError if the number of grid steps is 0 or less
-        InvalidPriorError if the prior has a different length from grid_steps
+        InvalidPriorShapeError if the prior has a different length from grid_steps
+        InvalidPriorDistributionError if the prior has values below zero
 
     """
     q = _parse_query(data, query)
@@ -275,4 +358,40 @@ def p_grid_array(
     )
 
 
-# TODO Log distributions?
+def log_p_grid_array(
+    data: pl.DataFrame,
+    query: str,
+    grid_steps: int = 100,
+    log_prior: np.ndarray | None = None,
+) -> xr.DataArray:
+    """Calculate probability density based on a query, and return as DataArray.
+
+    Args:
+        data: dataset from which probability is to be calculated
+        query: desired probability, eg. "Y|X, Z"
+        grid_steps: number of steps in grid approximation
+        log_prior (Optional): prior distribution on the log scale for grid approximation.
+                        Should be of the same lenght as grid_steps.
+                        Defaults to a uniform distribution.
+        include_zeros (Optional): whether combination that do not appear in
+                      data should also be included
+
+    Returns:
+        polars DataFrame containing probabilities
+
+    Raises:
+        VariableDoesNotExistError if a variable does not appear in the data.
+        InvalidGridStepsError if the number of grid steps is 0 or less
+        InvalidPriorShapeError if the prior has a different length from grid_steps
+        InvalidPriorDistributionError if the prior has values above zero
+
+    """  # noqa: E501
+    q = _parse_query(data, query)
+    grid = _p_grid(data, q, grid_steps, log_prior, include_zeros=True, log=True)
+
+    return (
+        grid.to_pandas()
+        .set_index([*q.variables, "p"])
+        .to_xarray()["log_density"]
+        .rename(f"log {q.name}")
+    )

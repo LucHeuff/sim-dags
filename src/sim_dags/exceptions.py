@@ -6,8 +6,12 @@ class VariableDoesNotExistError(SimDagError):
     """Raised when variable does not exist in probability calculation."""
 
 
-class InvalidPriorError(SimDagError):
+class InvalidPriorShapeError(SimDagError):
     """Raised when the provided prior has an incorrect shape."""
+
+
+class InvalidPriorDistributionError(SimDagError):
+    """Raised when the provided prior has an invalid distribution."""
 
 
 class InvalidGridStepsError(SimDagError):
