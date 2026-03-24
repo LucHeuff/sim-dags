@@ -62,6 +62,19 @@ def _count(data: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
     )
 
 
+def _permutations(df: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
+    """Generates all possible permutations from the combination of variables.
+
+    Assumes df to be the output of _count()
+    """
+    permutations = list(
+        product(*[df[var].unique().to_list() for var in q.variables])
+    )
+    return pl.DataFrame(
+        [dict(zip(q.variables, per, strict=True)) for per in permutations]
+    )
+
+
 def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFrame:
     """Calculate probability from a query."""
     df = _count(data, q).with_columns(p=pl.col("k") / pl.col("n"))
@@ -83,16 +96,10 @@ def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFram
         assert_allclose(_sum, 1, err_msg="Probabilities do not add to 1")
 
     if include_zeros:
-        # Getting all possible permutations of the values in the selected variables
-        permutations = list(
-            product(*[df[var].unique().to_list() for var in q.variables])
-        )
-        perm = pl.DataFrame(
-            [dict(zip(q.variables, per, strict=True)) for per in permutations]
-        )
-
-        df = perm.join(df, on=q.variables, how="left").with_columns(
-            pl.col("p").fill_null(0)
+        df = (
+            _permutations(df, q)
+            .join(df, on=q.variables, how="left")
+            .with_columns(pl.col("p").fill_null(0))
         )
 
     return df.select([*q.variables, "p"]).rename({"p": q.name}).sort(q.variables)
@@ -169,20 +176,23 @@ def _grid_approx(
     return pl.DataFrame({"p": p, "density": density})
 
 
-# TODO
 def p_grid(
     data: pl.DataFrame,
     query: str,
     grid_steps: int = 100,
-    prior: tuple[float, float] = (1.0, 1.0),
+    prior: np.ndarray | None = None,
     *,
-    include_zeros=False,
+    include_zeros: bool = False,
 ) -> pl.DataFrame:
     """Calculate probability density based on a query.
 
     Args:
         data: dataset from which probability is to be calculated
         query: desired probability, eg. "Y|X, Z"
+        grid_steps: number of steps in grid approximation
+        prior (Optional): prior distribution for grid approximation.
+                        Should be of the same lenght as grid_steps.
+                        Defaults to a uniform distribution.
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -191,11 +201,28 @@ def p_grid(
 
     Raises:
         VariableDoesNotExistError if a variable does not appear in the data.
+        InvalidGridStepsError if the number of grid steps is 0 or less
+        InvalidPriorError if the prior has a different length from grid_steps
 
     """
     q = _parse_query(data, query)
     counts = _count(data, q)
-    # TODO complete function -> iterate over counts and apply _grid_approx
+    if include_zeros:
+        # Adding all possible permutations and setting k=0 and n=0 when no counts
+        counts = (
+            _permutations(counts, q)
+            .join(counts, on=q.variables, how="left")
+            .with_columns(pl.col("k").fill_null(0), pl.col("n").fill_null(0))
+        )
+
+    def approx_count(d: dict) -> pl.DataFrame:
+        k = d.pop("k")
+        n = d.pop("n")
+        return _grid_approx(k, n, grid_steps, prior).with_columns(
+            **{key: pl.lit(d[key]) for key in d}
+        )
+
+    return pl.concat([approx_count(d) for d in counts.to_dicts()])
 
 
 # TODO probability distribution toevoegen?

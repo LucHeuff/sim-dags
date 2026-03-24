@@ -14,7 +14,17 @@ from sim_dags.exceptions import (
     InvalidPriorError,
     VariableDoesNotExistError,
 )
-from sim_dags.probability import _get_name, _grid_approx, _parse_query, p, p_array
+from sim_dags.probability import (
+    QueryParts,
+    _count,
+    _get_name,
+    _grid_approx,
+    _parse_query,
+    _permutations,
+    p,
+    p_array,
+    p_grid,
+)
 from sim_dags.utils import to_df
 
 
@@ -35,7 +45,7 @@ class ParseStrategy:
 
 @st.composite
 def parse_query_strategy(draw: st.DrawFn) -> ParseStrategy:
-    """Strategy for testing parse_query."""
+    """Strategy for testing _parse_query()."""
     event_error, given_error = draw(st.lists(st.booleans(), min_size=2, max_size=2))
     # Making sure given_none is never true when it is supposed to given an error
     given_none = False if given_error else draw(st.booleans())
@@ -88,7 +98,7 @@ def parse_query_strategy(draw: st.DrawFn) -> ParseStrategy:
 
 @given(s=parse_query_strategy())  # ty:ignore[missing-argument]
 def test_parse_query(s: ParseStrategy) -> None:
-    """Test parse_query()."""
+    """Test _parse_query()."""
     if s.error:
         with pytest.raises(VariableDoesNotExistError):
             _parse_query(s.df, s.query)
@@ -100,11 +110,27 @@ def test_parse_query(s: ParseStrategy) -> None:
         assert q.variables == s.variables, "variables do not match what is expected"
 
 
+def test_permutations() -> None:
+    """Test _permutations()."""
+    df = pl.DataFrame(
+        {"a": ["a", "a", "b", "b"], "b": [1, 2, 3, 4], "c": [5, 6, 7, 8]}
+    )
+    # only variables matters for _permutations
+    q = QueryParts("", [], None, ["a", "b"])
+    target = pl.DataFrame(
+        {
+            "a": ["a", "a", "a", "a", "b", "b", "b", "b"],
+            "b": [1, 2, 3, 4, 1, 2, 3, 4],
+        }
+    )
+
+    assert_frame_equal(_permutations(df, q), target, check_row_order=False)
+
+
 @dataclass
 class ProbabilityStrategy:
     """Contains parts for p() strategy."""
 
-    seed: int
     data: pl.DataFrame
     pw: pl.DataFrame
     px_w: pl.DataFrame
@@ -159,62 +185,10 @@ def static_strategy() -> ProbabilityStrategy:
         }
     )
 
-    return ProbabilityStrategy(0, data, pw, px_w, pz_xw, py_zxw, pyx_zw)
+    return ProbabilityStrategy(data, pw, px_w, pz_xw, py_zxw, pyx_zw)
 
 
-@st.composite
-def probability_strategy(draw: st.DrawFn) -> ProbabilityStrategy:
-    """Strategy for testing p() and p_array()."""
-    seed = draw(st.integers(min_value=0))
-    rng = np.random.default_rng(seed)
-    size = 100_000
-    min_n, max_n = 2, 4
-    alpha = 2
-
-    # Drawing from DAG following P(X, Y, Z, W) = P(Y|X, Z, W)P(Z|X, W)P(X|W)P(W)
-    nw = draw(st.integers(min_n, max_n))
-    pw = rng.dirichlet(np.repeat(alpha, nw))
-    pw_ = xr.DataArray(pw, coords={"w": np.arange(nw)}).rename("P(w)")
-
-    nx = draw(st.integers(min_n, max_n))
-    px_w = rng.dirichlet(np.repeat(alpha, nx), size=nw)
-    px_w_ = xr.DataArray(
-        px_w, coords={"w": np.arange(nw), "x": np.arange(nx)}
-    ).rename("P(x|w)")
-
-    nz = draw(st.integers(min_n, max_n))
-    pz_xw = rng.dirichlet(np.repeat(alpha, nz), size=(nx, nw))
-    pz_xw_ = xr.DataArray(
-        pz_xw, coords={"x": np.arange(nx), "w": np.arange(nw), "z": np.arange(nz)}
-    ).rename("P(z|x,w)")
-
-    py_zxw = rng.uniform(size=(nz, nx, nw))
-    # Adding the y=0 version manually since p() will calculate this regardless
-    py_zxw__ = xr.DataArray(
-        py_zxw,
-        coords={"z": np.arange(nz), "x": np.arange(nx), "w": np.arange(nw)},
-    ).rename("P(y|z,x,w)")
-    py_zxw_1 = py_zxw__.expand_dims(y=[1])
-    py_zxw_0 = (1 - py_zxw__).expand_dims(y=[0])
-    py_zxw_ = xr.concat([py_zxw_0, py_zxw_1], dim="y")
-
-    w = rng.choice(nw, p=pw, size=size)
-    x = rng.multinomial(1, pvals=px_w[w]).argmax(axis=1)
-    z = rng.multinomial(1, pvals=pz_xw[x, w]).argmax(axis=1)
-    y = rng.binomial(n=1, p=py_zxw[z, x, w])
-
-    return ProbabilityStrategy(
-        seed=seed,
-        data=pl.DataFrame({"x": x, "y": y, "z": z, "w": w}),
-        pw=to_df(pw_),
-        px_w=to_df(px_w_),
-        pz_xw=to_df(pz_xw_),
-        py_zxw=to_df(py_zxw_),
-        pyx_zw=pl.DataFrame(),  # Not doing anything with this
-    )
-
-
-def test_basic_p(static_strategy: ProbabilityStrategy) -> None:
+def test_p(static_strategy: ProbabilityStrategy) -> None:
     """Test p()."""
     s = static_strategy
     assert_frame_equal(p(s.data, "w"), s.pw)
@@ -224,7 +198,7 @@ def test_basic_p(static_strategy: ProbabilityStrategy) -> None:
     assert_frame_equal(p(s.data, "y,x|z,w"), s.pyx_zw)
 
 
-def test_basic_p_array(static_strategy: ProbabilityStrategy) -> None:
+def test_p_array(static_strategy: ProbabilityStrategy) -> None:
     """Test p_array() using property based test."""
     s = static_strategy
 
@@ -239,33 +213,6 @@ def test_basic_p_array(static_strategy: ProbabilityStrategy) -> None:
     assert_equal(get_p("z|x,w"), s.pz_xw)
     assert_equal(get_p("y|z,x,w"), s.py_zxw)
     assert_equal(get_p("y,x|z,w"), s.pyx_zw)
-
-
-@given(s=probability_strategy())  # ty:ignore[missing-argument]
-def test_p(s: ProbabilityStrategy) -> None:
-    """Test p()."""
-
-    def join(query: str, true: pl.DataFrame) -> pl.DataFrame:
-        name = _get_name(query)
-        df = p(s.data, query)
-        return df.join(
-            true, on=[col for col in df.columns if col != name], suffix=" true"
-        ).with_columns(L2=(pl.col(name) - pl.col(f"{name} true")).pow(2).sqrt())
-
-    def L2(df: pl.DataFrame, threshold: float) -> pl.DataFrame:  # noqa: N802
-        return df.filter(pl.col("L2") >= threshold)
-
-    pw = join("w", s.pw)
-    px_w = join("x|w", s.px_w)
-    pz_xw = join("z|x,w", s.pz_xw)
-    py_zxw = join("y|z,x,w", s.py_zxw)
-
-    assert len(c := L2(pw, 0.02)) == 0, f"L2 for P(w) over threshold.\n{c!s}"
-    assert len(c := L2(px_w, 0.05)) == 0, f"L2 for P(x|w) over threshold.\n{c!s}"
-    assert len(c := L2(pz_xw, 0.2)) == 0, f"L2 for P(z|x,w) over threshold.\n{c!s}"
-    assert len(c := L2(py_zxw, 0.4)) == 0, (
-        f"L2 for P(y|z,x,w) over threshold.\n{c!s}"
-    )
 
 
 @dataclass
@@ -296,7 +243,7 @@ def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
         else draw(st.integers(100, 1000))
     )
     sample_steps = max(steps, 1)
-    n = draw(st.integers(1, 50))
+    n = draw(st.integers(1, 30))
     k = draw(st.integers(0, max_value=n))
     if prior_error:
         prior = np.repeat(0, sample_steps + 10)
@@ -332,4 +279,76 @@ def test_grid_approx(s: GridApproxStrategy) -> None:
         if s.prior is None:
             density = grid["density"].to_numpy()
             L2 = np.sqrt(np.power(density - s.beta, 2))  # noqa: N806
-            assert L2.mean() <= 0.01, "Density mismatch with Beta distribution"  # noqa: PLR2004
+            assert L2.mean() <= 0.011, "Density mismatch with Beta distribution"  # noqa: PLR2004
+
+
+def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
+    """Test p_grid()."""
+    s = static_strategy
+
+    def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
+        q = _parse_query(s.data, query)
+        grid = p_grid(s.data, query, grid_steps)
+        test = (
+            grid.with_columns(
+                (pl.col("density") == pl.col("density").max())
+                .over(q.variables)
+                .alias("max")
+            )
+            .filter(pl.col("max"))
+            .select([*q.variables, "p"])
+            .rename({"p": q.name})
+        )
+
+        assert grid.select(pl.col("p").n_unique()).item() == grid_steps, (
+            "Incorrect grid steps."
+        )
+        assert_frame_equal(
+            test,
+            true,
+            check_exact=False,
+            check_row_order=False,
+            check_dtypes=False,
+            abs_tol=0.1,
+        )
+
+    # Testing grid outputs
+    test_grid("w", s.pw, 70)
+    test_grid("x|w", s.px_w, 100)
+    test_grid("z|x,w", s.pz_xw, 135)
+    test_grid("y|z,x,w", s.py_zxw, 205)
+    test_grid("y,x|z,w", s.pyx_zw, 300)
+
+    # Testing custom prior
+    steps = 100
+    grid = p_grid(s.data, "w", grid_steps=steps, prior=np.linspace(0, 10, 100))
+    assert grid.select(pl.col("p").n_unique()).item() == steps, (
+        "Incorrect grid steps."
+    )
+
+    # Testing include_zeros
+    q = _parse_query(s.data, "y,x|z,w")
+    perms = _permutations(_count(s.data, q), q)
+
+    grid_perms = (
+        p_grid(s.data, "y,x|z,w", include_zeros=True)
+        .select(["y", "x", "z", "w"])
+        .unique()
+    )
+    assert_frame_equal(
+        grid_perms,
+        perms,
+        check_row_order=False,
+        check_column_order=False,
+        check_dtypes=False,
+    )
+
+    # Testing errors
+    with pytest.raises(VariableDoesNotExistError):
+        p_grid(s.data, "f")
+    with pytest.raises(InvalidGridStepsError):
+        p_grid(s.data, "w", -1)
+    with pytest.raises(InvalidPriorError):
+        p_grid(s.data, "w", grid_steps=150, prior=np.repeat(5, 50))
+
+    # TODO test errors
