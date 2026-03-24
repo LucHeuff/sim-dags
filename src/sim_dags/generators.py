@@ -15,7 +15,6 @@ class SimpleDAGParams:
     nz: int = 4
     nx: int = 3
     alpha: int = 2
-    rng: np.random.Generator = field(init=False)
     px: npt.NDArray[np.float64] = field(init=False)
     px_z: npt.NDArray[np.float64] = field(init=False)
     pz: npt.NDArray[np.float64] = field(init=False)
@@ -28,16 +27,14 @@ class SimpleDAGParams:
 
     def __post_init__(self) -> None:
         """Initialise random generator and parameters."""
-        self.rng = np.random.default_rng(self.seed)
-        self.px = self.rng.dirichlet(np.repeat(self.alpha, self.nx))
-        self.px_z = self.rng.dirichlet(np.repeat(self.alpha, self.nx), size=self.nz)
-        self.pz = self.rng.dirichlet(np.repeat(self.alpha, self.nz))
-        self.pz_x = self.rng.dirichlet(np.repeat(self.alpha, self.nz), size=self.nx)
-        self.pz_xy = self.rng.dirichlet(
-            np.repeat(self.alpha, self.nz), size=(self.nx, 2)
-        )
-        self.py_x = self.rng.uniform(size=self.nx)
-        self.py_xz = self.rng.uniform(size=(self.nx, self.nz))
+        rng = np.random.default_rng(self.seed)
+        self.px = rng.dirichlet(np.repeat(self.alpha, self.nx))
+        self.px_z = rng.dirichlet(np.repeat(self.alpha, self.nx), size=self.nz)
+        self.pz = rng.dirichlet(np.repeat(self.alpha, self.nz))
+        self.pz_x = rng.dirichlet(np.repeat(self.alpha, self.nz), size=self.nx)
+        self.pz_xy = rng.dirichlet(np.repeat(self.alpha, self.nz), size=(self.nx, 2))
+        self.py_x = rng.uniform(size=self.nx)
+        self.py_xz = rng.uniform(size=(self.nx, self.nz))
         self.p_do_x = np.repeat(1 / self.nx, self.nx)
         # Schema checks for output
         self.schema = pa.DataFrameSchema(
@@ -78,10 +75,10 @@ GenerateFunction = Callable[[int, SimpleDAGParams], pl.DataFrame]
 
 
 def generate_pipe(
-    size: int, params: SimpleDAGParams, *, do_x: bool = False
+    size: int, params: SimpleDAGParams, seed: int, *, do_x: bool = False
 ) -> pl.DataFrame:
     """Generate samples from Pipe DAG."""
-    rng = params.rng
+    rng = np.random.default_rng(seed)
     x_name, schema, px = _get_do_x(params, do_x=do_x)
 
     x = rng.choice(params.nx, p=px, size=size)
@@ -93,10 +90,10 @@ def generate_pipe(
 
 
 def generate_fork(
-    size: int, params: SimpleDAGParams, *, do_x: bool = False
+    size: int, params: SimpleDAGParams, seed: int, *, do_x: bool = False
 ) -> pl.DataFrame:
     """Generate samples from Fork DAG."""
-    rng = params.rng
+    rng = np.random.default_rng(seed)
     x_name, schema, _ = _get_do_x(params, do_x=do_x)
 
     z = rng.choice(params.nz, p=params.pz, size=size)
@@ -112,10 +109,10 @@ def generate_fork(
 
 
 def generate_collider(
-    size: int, params: SimpleDAGParams, *, do_x: bool = False
+    size: int, params: SimpleDAGParams, seed: int, *, do_x: bool = False
 ) -> pl.DataFrame:
     """Generate samples from Collider DAG."""
-    rng = params.rng
+    rng = np.random.default_rng(seed)
     x_name, schema, px = _get_do_x(params, do_x=do_x)
 
     x = rng.choice(params.nx, p=px, size=size)
