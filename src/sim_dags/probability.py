@@ -252,7 +252,7 @@ def _p_grid(
 def p_grid(
     data: pl.DataFrame,
     query: str,
-    grid_steps: int = 100,
+    grid_steps: int = 1000,
     prior: np.ndarray | None = None,
     *,
     include_zeros: bool = False,
@@ -288,7 +288,7 @@ def p_grid(
 def log_p_grid(
     data: pl.DataFrame,
     query: str,
-    grid_steps: int = 100,
+    grid_steps: int = 1000,
     log_prior: np.ndarray | None = None,
     *,
     include_zeros: bool = False,
@@ -324,7 +324,7 @@ def log_p_grid(
 def p_grid_array(
     data: pl.DataFrame,
     query: str,
-    grid_steps: int = 100,
+    grid_steps: int = 1000,
     prior: np.ndarray | None = None,
 ) -> xr.DataArray:
     """Calculate probability density based on a query, and return as DataArray.
@@ -363,7 +363,7 @@ def p_grid_array(
 def log_p_grid_array(
     data: pl.DataFrame,
     query: str,
-    grid_steps: int = 100,
+    grid_steps: int = 1000,
     log_prior: np.ndarray | None = None,
 ) -> xr.DataArray:
     """Calculate probability density based on a query, and return as DataArray.
