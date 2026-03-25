@@ -1,9 +1,7 @@
-from collections.abc import Callable
 from functools import partial
 from typing import Protocol
 
 import altair as alt
-import pandera.polars as pa
 import polars as pl
 
 from sim_dags.generators import (

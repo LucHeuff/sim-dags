@@ -5,7 +5,6 @@ import hypothesis.strategies as st
 import numpy as np
 import polars as pl
 import pytest
-import xarray as xr
 from hypothesis import given
 from polars.testing import assert_frame_equal
 from scipy import stats
