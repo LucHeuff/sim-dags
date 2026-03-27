@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 import altair as alt
 import polars as pl
 import xarray as xr
@@ -24,7 +26,10 @@ LEGEND_LABELS = 15
 TITLE = 18
 
 
-def default_chart_config(chart: Chart) -> Chart:  # pragma: no cover
+C = TypeVar("C", bound=Chart)  # Bound makes C one of the options in Chart
+
+
+def default_chart_config(chart: C) -> C:  # pragma: no cover
     """Apply default configuration to a chart."""
     return (
         chart.configure_axis(grid=False)
