@@ -53,7 +53,7 @@ def get_simple_generator(gen: GenerateFunction) -> SimulateFunction:
     return func
 
 
-def compare_simple_dags() -> Chart:
+def compare_simple_dags() -> alt.VConcatChart:
     """Generate comparison for simple DAGs."""
     params = SimpleDAGParams(12345)
 
