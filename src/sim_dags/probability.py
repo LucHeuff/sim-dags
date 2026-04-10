@@ -36,7 +36,7 @@ def _get_name(query: str) -> str:
 def _parse_query(data: pl.DataFrame, query: str) -> QueryParts:
     """Parse query to relevant parts and perform checks with data."""
     if len(illegal := (set(data.columns) & ILLEGAL_NAMES)) > 0:
-        msg = f"Found column names {illegal} in data. These column names are not allowed, as they are used internally.\nThey are also not very pretty."
+        msg = f"Found column names {illegal} in data. These column names are not allowed, as they are used internally.\nThey are also not very pretty."  # noqa: E501
         raise IllegalColumnNameError(msg)
 
     name = _get_name(query)
@@ -94,7 +94,7 @@ def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFram
     # --- Sanity checks
     # Making sure there are no duplicates in the dataframe after counting
     assert len(df.filter(df.is_duplicated())) == 0, (
-        "Counts contain duplicates. This usually happens due to column name collisions."
+        "Counts contain duplicates. This usually happens due to column name collisions."  # noqa: E501
     )
 
     if q.given is None:

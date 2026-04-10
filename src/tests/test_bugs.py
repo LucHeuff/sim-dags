@@ -44,7 +44,7 @@ def sim_dag(size: int, params: Parameters, seed: int) -> pl.DataFrame:
 
 
 def test_p_array_duplicates() -> None:
-    """Testing a bug where duplicates caused p_array to fail on MultiIndex conversion."""
+    """Testing a bug where duplicates caused p_array to fail on MultiIndex conversion."""  # noqa: E501
     params = Parameters(12346)
     sim = sim_dag(100, params, 12345)
 
