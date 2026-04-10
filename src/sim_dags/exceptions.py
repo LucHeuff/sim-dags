@@ -16,3 +16,7 @@ class InvalidPriorDistributionError(SimDagError):
 
 class InvalidGridStepsError(SimDagError):
     """Raised when trying to set grid steps to an invalid value."""
+
+
+class IllegalColumnNameError(SimDagError):
+    """Raised when a column name is used that is also used internally."""

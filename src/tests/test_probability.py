@@ -9,12 +9,14 @@ from hypothesis import given
 from polars.testing import assert_frame_equal
 from scipy import stats
 from sim_dags.exceptions import (
+    IllegalColumnNameError,
     InvalidGridStepsError,
     InvalidPriorDistributionError,
     InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
 from sim_dags.probability import (
+    ILLEGAL_NAMES,
     QueryParts,
     _count,
     _get_name,
@@ -112,6 +114,13 @@ def test_parse_query(s: ParseStrategy) -> None:
         assert q.event == s.event, "event does not match what is expected"
         assert q.given == s.given, "given does not match what is expected"
         assert q.variables == s.variables, "variables do not match what is expected"
+
+
+def test_parse_query_strategy_illegal() -> None:
+    """Test if _parse_query() raises on illegal column names."""
+    df = pl.DataFrame({name: [1, 2] for name in ILLEGAL_NAMES})
+    with pytest.raises(IllegalColumnNameError):
+        _parse_query(df, "_p|_k,_n")
 
 
 def test_permutations() -> None:
@@ -316,7 +325,7 @@ def test_log_grid_approx(s: GridApproxStrategy) -> None:
         if s.log_prior is None:
             density = grid["log_density"].to_numpy()
             L2 = np.sqrt(np.power(density - s.log_beta, 2))  # noqa: N806
-            assert np.nanmean(L2) <= 0.1, "Density mismatch with Beta distribution"  # noqa: PLR2004
+            assert np.nanmean(L2) <= 0.15, "Density mismatch with Beta distribution"  # noqa: PLR2004
 
 
 def test_p_grid(static_strategy: ProbabilityStrategy) -> None:

@@ -9,11 +9,14 @@ from scipy import stats
 from scipy.special import logsumexp
 
 from sim_dags.exceptions import (
+    IllegalColumnNameError,
     InvalidGridStepsError,
     InvalidPriorDistributionError,
     InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
+
+ILLEGAL_NAMES = {"_k", "_n", "_p"}
 
 
 @dataclass
@@ -32,6 +35,10 @@ def _get_name(query: str) -> str:
 
 def _parse_query(data: pl.DataFrame, query: str) -> QueryParts:
     """Parse query to relevant parts and perform checks with data."""
+    if len(illegal := (set(data.columns) & ILLEGAL_NAMES)) > 0:
+        msg = f"Found column names {illegal} in data. These column names are not allowed, as they are used internally.\nThey are also not very pretty."
+        raise IllegalColumnNameError(msg)
+
     name = _get_name(query)
 
     if "|" not in query:
@@ -55,12 +62,15 @@ def _count(data: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
     """Count number of occurrences of event and given if applicable."""
     if q.given is None:
         return (
-            data.group_by(q.event).agg(k=pl.len()).with_columns(n=pl.lit(len(data)))
+            data.group_by(q.event)
+            .agg(_k=pl.len())
+            .with_columns(_n=pl.lit(len(data)))
         )
     return (
         data.group_by(q.variables)
-        .agg(k=pl.len())
-        .with_columns(n=pl.col("k").sum().over(q.given))
+        .agg(_k=pl.len())
+        .with_columns(_n=pl.col("_k").sum().over(q.given))
+        # .unique()
     )
 
 
@@ -79,20 +89,25 @@ def _permutations(df: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
 
 def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFrame:
     """Calculate probability from a query."""
-    df = _count(data, q).with_columns(p=pl.col("k") / pl.col("n"))
+    df = _count(data, q).with_columns(_p=pl.col("_k") / pl.col("_n"))
 
     # --- Sanity checks
+    # Making sure there are no duplicates in the dataframe after counting
+    assert len(df.filter(df.is_duplicated())) == 0, (
+        "Counts contain duplicates. This usually happens due to column name collisions."
+    )
+
     if q.given is None:
         # sum of all probabilities should be (almost) 1
-        _sum = df.select(pl.col("p").sum()).item()
+        _sum = df.select(pl.col("_p").sum()).item()
         assert_almost_equal(_sum, 1, err_msg="Probabilities do not add to 1")
 
     else:
         # Probabilities in each group should add to (almost) 1
         _sum = (
             df.group_by(q.given)
-            .agg(pl.col("p").sum())
-            .select(pl.col("p"))
+            .agg(pl.col("_p").sum())
+            .select(pl.col("_p"))
             .to_numpy()
         )
         assert_allclose(_sum, 1, err_msg="Probabilities do not add to 1")
@@ -101,10 +116,10 @@ def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFram
         df = (
             _permutations(df, q)
             .join(df, on=q.variables, how="left")
-            .with_columns(pl.col("p").fill_null(0))
+            .with_columns(pl.col("_p").fill_null(0))
         )
 
-    return df.select([*q.variables, "p"]).rename({"p": q.name}).sort(q.variables)
+    return df.select([*q.variables, "_p"]).rename({"_p": q.name}).sort(q.variables)
 
 
 def p(
@@ -233,15 +248,15 @@ def _p_grid(
         counts = (
             _permutations(counts, q)
             .join(counts, on=q.variables, how="left")
-            .with_columns(pl.col("k").fill_null(0), pl.col("n").fill_null(0))
+            .with_columns(pl.col("_k").fill_null(0), pl.col("_n").fill_null(0))
         )
 
     # Determining on which scale the results should be
     approx = _log_grid_approx if log else _grid_approx
 
     def approx_count(d: dict) -> pl.DataFrame:
-        k = d.pop("k")
-        n = d.pop("n")
+        k = d.pop("_k")
+        n = d.pop("_n")
         return approx(k, n, grid_steps, prior).with_columns(
             **{key: pl.lit(d[key]) for key in d}
         )
