@@ -4,7 +4,7 @@ from typing import Protocol
 import altair as alt
 import polars as pl
 
-from sim_dags.generators import (
+from sim_dags.example_generators import (
     DAG1Params,
     SimpleDAGParams,
     generate_collider,
