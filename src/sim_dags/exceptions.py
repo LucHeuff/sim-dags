@@ -20,3 +20,7 @@ class InvalidGridStepsError(SimDagError):
 
 class IllegalColumnNameError(SimDagError):
     """Raised when a column name is used that is also used internally."""
+
+
+class UnknownDoVariableError(SimDagError):
+    """Raised when trying to intervene on a variable that does not appear in the DAG."""
