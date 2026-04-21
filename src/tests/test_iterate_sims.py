@@ -1,30 +1,37 @@
-import polars as pl
-from sim_dags.example_generators import SimpleDAGParams, generate_pipe
-from sim_dags.iterate_sims import iterate_samples, plot_samples
-from sim_dags.probability import p
-from sim_dags.utils import default_chart_config
+from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
+from sim_dags.iterate_sims import (
+    build_simulate_function,
+    iterate_samples,
+    plot_samples,
+)
+from sim_dags.probability import p, p_array
+from sim_dags.utils import default_chart_config, to_df
 
 
 def test_iterate_sims() -> None:
     """Integration test of iterate_sims.py."""
-    obs_ = "P(y|x)"
-    do_ = "P(y|do(x))"
+    distributions = [
+        Categorical("x", 3),
+        Categorical("z", 4, ["x"]),
+        Binomial("y", ["x", "z"]),
+    ]
 
-    params = SimpleDAGParams(54321)
+    dag_simulator = DAGSimulator(distributions)
 
-    def sim_func(size: int, seed: int) -> pl.DataFrame:
-        sim = generate_pipe(params, size, seed)
-        do_sim = generate_pipe(params, size, seed, do_x=True)
+    est_ = "∑z P(y|x,z)P(z)"
 
-        py_x = p(sim, "y|x")
-        py_do_x = p(do_sim, "y|do(x)")
-
-        return (
-            py_x.join(py_do_x, left_on=["y", "x"], right_on=["y", "do(x)"])
-            .with_columns(pl.col(do_) - pl.col(obs_).pow(2).sqrt().alias(obs_))
-            .select(pl.col([obs_]).mean())
-            .unpivot(variable_name="estimand")
-        )
+    sim_func = build_simulate_function(
+        dag_simulator,
+        intervention=lambda samples: p(samples, "y|x", name="do"),
+        estimands={
+            est_: lambda samples: to_df(
+                (p_array(samples, "y|x,z") * p_array(samples, "z"))
+                .sum(dim="z")
+                .rename(est_)
+            )
+        },
+        true_do={"x": True},
+    )
 
     n_sizes = 3
     n_seeds = 2
