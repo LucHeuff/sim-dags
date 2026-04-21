@@ -33,13 +33,13 @@ def _get_name(query: str) -> str:
     return f"P({query})"
 
 
-def _parse_query(data: pl.DataFrame, query: str) -> QueryParts:
+def _parse_query(data: pl.DataFrame, query: str, name: str | None) -> QueryParts:
     """Parse query to relevant parts and perform checks with data."""
     if len(illegal := (set(data.columns) & ILLEGAL_NAMES)) > 0:
         msg = f"Found column names {illegal} in data. These column names are not allowed, as they are used internally.\nThey are also not very pretty."  # noqa: E501
         raise IllegalColumnNameError(msg)
 
-    name = _get_name(query)
+    name = _get_name(query) if name is None else name
 
     if "|" not in query:
         e, g = query, None
@@ -123,13 +123,18 @@ def _p(data: pl.DataFrame, q: QueryParts, *, include_zeros: bool) -> pl.DataFram
 
 
 def p(
-    data: pl.DataFrame, query: str, *, include_zeros: bool = False
+    data: pl.DataFrame,
+    query: str,
+    name: str | None = None,
+    *,
+    include_zeros: bool = False,
 ) -> pl.DataFrame:
     """Calculate probability based on a query.
 
     Args:
         data: dataset from which probability is to be calculated
         query: desired probability, eg. "Y|X, Z"
+        name: desired name of probability column. Defaults to P(<query>).
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -140,17 +145,18 @@ def p(
         VariableDoesNotExistError if a variable does not appear in the data.
 
     """
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
 
     return _p(data, q, include_zeros=include_zeros)
 
 
-def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
+def p_array(data: pl.DataFrame, query: str, name: str | None = None) -> xr.DataArray:
     """Calculate probability array based on a query.
 
     Args:
         data: dataset from which probability is to be calculated
         query: desired probability, eg. "Y|X, Z"
+        name: desired name of probability column. Defaults to P(<query>).
 
     Returns:
         polars DataFrame containing probabilities
@@ -159,7 +165,7 @@ def p_array(data: pl.DataFrame, query: str) -> xr.DataArray:
         VariableDoesNotExistError if a variable does not appear in the data.
 
     """
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
     # Conversion using pandas,
     # since that makes sure the values end up in the right place
     p_ = _p(data, q, include_zeros=True)
@@ -269,6 +275,7 @@ def p_grid(
     query: str,
     grid_steps: int = 1000,
     prior: np.ndarray | None = None,
+    name: str | None = None,
     *,
     include_zeros: bool = False,
 ) -> pl.DataFrame:
@@ -281,6 +288,7 @@ def p_grid(
         prior (Optional): prior distribution for grid approximation.
                         Should be of the same lenght as grid_steps.
                         Defaults to a uniform distribution.
+        name: desired name for probability column. Defaults to P(<query>)
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -294,7 +302,7 @@ def p_grid(
         InvalidPriorDistributionError if the prior has values below zero
 
     """
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
     return _p_grid(data, q, grid_steps, prior, include_zeros=include_zeros).rename(
         {"density": q.name}
     )
@@ -305,6 +313,7 @@ def log_p_grid(
     query: str,
     grid_steps: int = 1000,
     log_prior: np.ndarray | None = None,
+    name: str | None = None,
     *,
     include_zeros: bool = False,
 ) -> pl.DataFrame:
@@ -317,6 +326,7 @@ def log_p_grid(
         log_prior (Optional): prior distribution on the log scale for grid approximation.
                         Should be of the same lenght as grid_steps.
                         Defaults to a uniform distribution.
+        name: desired name for probability column. Defaults to P(<query>)
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -330,7 +340,7 @@ def log_p_grid(
         InvalidPriorDistributionError if the prior has values above zero
 
     """  # noqa: E501
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
     return _p_grid(
         data, q, grid_steps, log_prior, include_zeros=include_zeros, log=True
     ).rename({"log_density": f"log {q.name}"})
@@ -341,6 +351,7 @@ def p_grid_array(
     query: str,
     grid_steps: int = 1000,
     prior: np.ndarray | None = None,
+    name: str | None = None,
 ) -> xr.DataArray:
     """Calculate probability density based on a query, and return as DataArray.
 
@@ -351,6 +362,7 @@ def p_grid_array(
         prior (Optional): prior distribution for grid approximation.
                         Should be of the same lenght as grid_steps.
                         Defaults to a uniform distribution.
+        name: desired name for probability column. Defaults to P(<query>)
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -364,7 +376,7 @@ def p_grid_array(
         InvalidPriorDistributionError if the prior has values below zero
 
     """
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
     grid = _p_grid(data, q, grid_steps, prior, include_zeros=True)
 
     return (
@@ -380,6 +392,7 @@ def log_p_grid_array(
     query: str,
     grid_steps: int = 1000,
     log_prior: np.ndarray | None = None,
+    name: str | None = None,
 ) -> xr.DataArray:
     """Calculate probability density based on a query, and return as DataArray.
 
@@ -390,6 +403,7 @@ def log_p_grid_array(
         log_prior (Optional): prior distribution on the log scale for grid approximation.
                         Should be of the same lenght as grid_steps.
                         Defaults to a uniform distribution.
+        name: desired name for probability column. Defaults to P(<query>)
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -403,7 +417,7 @@ def log_p_grid_array(
         InvalidPriorDistributionError if the prior has values above zero
 
     """  # noqa: E501
-    q = _parse_query(data, query)
+    q = _parse_query(data, query, name)
     grid = _p_grid(data, q, grid_steps, log_prior, include_zeros=True, log=True)
 
     return (

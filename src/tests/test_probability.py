@@ -38,7 +38,8 @@ from sim_dags.utils import to_df
 class ParseStrategy:
     """Contains parts for _parse_query() strategy."""
 
-    name: str
+    name: str | None
+    expected_name: str
     event: list[str]
     given: list[str] | None
     variables: list[str]
@@ -87,10 +88,21 @@ def parse_query_strategy(draw: st.DrawFn) -> ParseStrategy:
         else ",".join(event) + "|" + ",".join(given_)
     )
 
+    # Determining whether to use a custom name
+    custom_name = draw(st.booleans())
+
+    expected_name = (
+        draw(st.text(st.characters(categories=["Ll"])))
+        if custom_name
+        else _get_name(query)
+    )
+    name = expected_name if custom_name else None
+
     variables = event if given_ is None else event + given_
 
     return ParseStrategy(
-        _get_name(query),
+        name,
+        expected_name,
         event,
         given_,
         variables,
@@ -107,10 +119,10 @@ def test_parse_query(s: ParseStrategy) -> None:
     """Test _parse_query()."""
     if s.error:
         with pytest.raises(VariableDoesNotExistError):
-            _parse_query(s.df, s.query)
+            _parse_query(s.df, s.query, s.name)
     else:
-        q = _parse_query(s.df, s.query)
-        assert q.name == s.name, "name does not match what is expected"
+        q = _parse_query(s.df, s.query, s.name)
+        assert q.name == s.expected_name, "name does not match what is expected"
         assert q.event == s.event, "event does not match what is expected"
         assert q.given == s.given, "given does not match what is expected"
         assert q.variables == s.variables, "variables do not match what is expected"
@@ -120,7 +132,7 @@ def test_parse_query_strategy_illegal() -> None:
     """Test if _parse_query() raises on illegal column names."""
     df = pl.DataFrame({name: [1, 2] for name in ILLEGAL_NAMES})
     with pytest.raises(IllegalColumnNameError):
-        _parse_query(df, "_p|_k,_n")
+        _parse_query(df, "_p|_k,_n", None)
 
 
 def test_permutations() -> None:
@@ -290,7 +302,7 @@ def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
     )
 
 
-@given(s=get_grid_approx_strategy())  # ty:ignore[missing-argument]
+@given(s=get_grid_approx_strategy())
 def test_grid_approx(s: GridApproxStrategy) -> None:
     """Test _grid_approx()."""
     if s.grid_error:
@@ -309,7 +321,7 @@ def test_grid_approx(s: GridApproxStrategy) -> None:
             assert L2.mean() <= 0.011, "Density mismatch with Beta distribution"  # noqa: PLR2004
 
 
-@given(s=get_grid_approx_strategy())  # ty:ignore[missing-argument]
+@given(s=get_grid_approx_strategy())
 def test_log_grid_approx(s: GridApproxStrategy) -> None:
     """Test _log_grid_approx()."""
     if s.grid_error:
@@ -333,7 +345,7 @@ def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
     s = static_strategy
 
     def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
-        q = _parse_query(s.data, query)
+        q = _parse_query(s.data, query, None)
         grid = p_grid(s.data, query, grid_steps)
         test = (
             grid.with_columns(
@@ -373,7 +385,7 @@ def test_p_grid(static_strategy: ProbabilityStrategy) -> None:
     )
 
     # Testing include_zeros
-    q = _parse_query(s.data, "y,x|z,w")
+    q = _parse_query(s.data, "y,x|z,w", None)
     perms = _permutations(_count(s.data, q), q)
 
     grid_perms = (
@@ -405,7 +417,7 @@ def test_log_p_grid(static_strategy: ProbabilityStrategy) -> None:
     s = static_strategy
 
     def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
-        q = _parse_query(s.data, query)
+        q = _parse_query(s.data, query, None)
         grid = log_p_grid(s.data, query, grid_steps)
         test = (
             grid.with_columns(density=pl.col(f"log {q.name}").exp())
@@ -448,7 +460,7 @@ def test_log_p_grid(static_strategy: ProbabilityStrategy) -> None:
     )
 
     # Testing include_zeros
-    q = _parse_query(s.data, "y,x|z,w")
+    q = _parse_query(s.data, "y,x|z,w", None)
     perms = _permutations(_count(s.data, q), q)
 
     grid_perms = (
@@ -480,7 +492,7 @@ def test_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
     s = static_strategy
 
     def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
-        q = _parse_query(s.data, query)
+        q = _parse_query(s.data, query, None)
         grid = to_df(p_grid_array(s.data, query, grid_steps))
         test = (
             grid.with_columns(
@@ -542,7 +554,7 @@ def test_log_p_grid_array(static_strategy: ProbabilityStrategy) -> None:
     s = static_strategy
 
     def test_grid(query: str, true: pl.DataFrame, grid_steps: int) -> None:
-        q = _parse_query(s.data, query)
+        q = _parse_query(s.data, query, None)
         grid = to_df(log_p_grid_array(s.data, query, grid_steps))
         test = (
             grid.with_columns(
