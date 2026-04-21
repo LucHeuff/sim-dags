@@ -102,7 +102,7 @@ def parse_query_strategy(draw: st.DrawFn) -> ParseStrategy:
     )
 
 
-@given(s=parse_query_strategy())  # ty:ignore[missing-argument]
+@given(s=parse_query_strategy())
 def test_parse_query(s: ParseStrategy) -> None:
     """Test _parse_query()."""
     if s.error:

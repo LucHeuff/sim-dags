@@ -23,4 +23,16 @@ class IllegalColumnNameError(SimDagError):
 
 
 class UnknownDoVariableError(SimDagError):
-    """Raised when trying to intervene on a variable that does not appear in the DAG."""
+    """Raised when trying to intervene on a variable that is not in the DAG."""
+
+
+class InvalidDoValueError(SimDagError):
+    """Raised when trying to set an intervention variable outside available values."""  # noqa: E501
+
+
+class UnknownDistributionError(SimDagError):
+    """Raised when there is no generator implemented for this distribution."""
+
+
+class MissingDistributionError(SimDagError):
+    """Raised when a variable does not have an associated distribution."""
