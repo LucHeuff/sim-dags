@@ -1,68 +1,61 @@
-from functools import partial
-from typing import Protocol
-
 import altair as alt
 import polars as pl
 
+from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
 from sim_dags.example_generators import (
-    DAG1Params,
-    SimpleDAGParams,
-    generate_collider,
     generate_dag1,
-    generate_fork,
-    generate_pipe,
 )
-from sim_dags.iterate_sims import SimulateFunction, iterate_samples, plot_samples
+from sim_dags.iterate_sims import (
+    SimulateFunction,
+    build_simulate_function,
+    iterate_samples,
+    plot_samples,
+)
 from sim_dags.probability import p, p_array
 from sim_dags.utils import Chart, default_chart_config, to_df
 
 
-class GenerateFunction(Protocol):  # noqa: D101
-    def __call__(  # noqa: D102
-        self, size: int, seed: int, *, do_x: bool = False
-    ) -> pl.DataFrame: ...
-
-
 # slightly more involved due to having three simple DAGs
-def get_simple_generator(gen: GenerateFunction) -> SimulateFunction:
+def get_simple_generator(gen: DAGSimulator) -> SimulateFunction:
     """Makes a SimulateFunction for the chosen generator."""
-    obs_ = "P(y|x)"
     sum_ = "∑z P(y|x,z)P(z)"
-
-    def func(size: int, seed: int) -> pl.DataFrame:
-        sim = gen(size=size, seed=seed)
-        do_sim = gen(size=size, seed=seed, do_x=True)
-
-        py_x = p(sim, "y|x")
-        py_do_x = p(do_sim, "y|do(x)")
-        py_xz_pz = to_df(
-            (p_array(sim, "y|x,z") * p_array(sim, "z")).sum(dim="z").rename(sum_)
-        )
-
-        return (
-            py_x.join(py_xz_pz, on=["y", "x"])
-            .join(py_do_x, left_on=["y", "x"], right_on=["y", "do(x)"])
-            .with_columns(
-                (pl.col("P(y|do(x))") - pl.col(obs_)).pow(2).sqrt().alias(obs_),
-                (pl.col("P(y|do(x))") - pl.col(sum_)).pow(2).sqrt().alias(sum_),
+    return build_simulate_function(
+        gen,
+        intervention=lambda samples: p(samples, "y|x", name="do"),
+        # calculating ∑z P(y|x,z)P(z) using p_arrays
+        estimands={
+            sum_: lambda samples: to_df(
+                (p_array(samples, "y|x,z") * p_array(samples, "z"))
+                .sum(dim="z")
+                .rename(sum_)
             )
-            .select(pl.col([obs_, sum_]).mean())
-            .unpivot(variable_name="estimand")
-        )
-
-    return func
+        },
+    )
 
 
-def compare_simple_dags() -> alt.VConcatChart:
+def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart:
     """Generate comparison for simple DAGs."""
-    params = SimpleDAGParams(12345)
-
-    pipe = partial(generate_pipe, params=params)
-    fork = partial(generate_fork, params=params)
-    collider = partial(generate_collider, params=params)
-
-    n_sizes = 5
-    n_seeds = 10
+    pipe = DAGSimulator(
+        distributions=[
+            Categorical("x", 3),
+            Categorical("z", 4, ["x"]),
+            Binomial("y", ["x", "z"]),
+        ]
+    )
+    fork = DAGSimulator(
+        distributions=[
+            Categorical("z", 4),
+            Categorical("x", 4, ["z"]),
+            Binomial("y", ["x", "z"]),
+        ]
+    )
+    collider = DAGSimulator(
+        distributions=[
+            Categorical("x", 3),
+            Binomial("y", ["x"]),
+            Categorical("z", 4, ["x", "y"]),
+        ]
+    )
 
     pipe_chart = plot_samples(
         iterate_samples(get_simple_generator(pipe), n_sizes=n_sizes, n_seeds=n_seeds)
@@ -81,17 +74,21 @@ def compare_simple_dags() -> alt.VConcatChart:
     ).configure_range(category=["orangered", "forestgreen"])
 
 
-def compare_dag1() -> Chart:
-    """Generate comparison for DAG1."""
-    params = DAG1Params(12345)
+# --- Comparing DAG 1, writing the SimulateFunction manually.
 
+
+def compare_dag1(n_sizes: int = 5, n_seeds: int = 10) -> Chart:
+    """Generate comparison for DAG1.
+
+    This is an example of writing the SimulateFunction manually.
+    """
     obs_ = "P(y|x)"
     wrong_est_ = "∑w P(y|x, w)P(w)"
     est_ = "∑w ∑z P(y|x, z, w)P(z)P(w)"
 
     def sim_func(size: int, seed: int) -> pl.DataFrame:
-        sim = generate_dag1(size=size, params=params, seed=seed)
-        do_sim = generate_dag1(size=size, params=params, seed=seed, do_x=True)
+        sim = generate_dag1(size=size, seed=seed)
+        do_sim = generate_dag1(size=size, seed=seed, do_x=True)
 
         py_x = p(sim, "y|x")
         py_do_x = p(do_sim, "y|do(x)")
@@ -125,9 +122,6 @@ def compare_dag1() -> Chart:
             .unpivot(variable_name="estimand")
         )
 
-    n_sizes = 5
-    n_seeds = 10
-
     return (
         default_chart_config(
             plot_samples(iterate_samples(sim_func, n_sizes, n_seeds))
@@ -141,7 +135,8 @@ def compare_dag1() -> Chart:
 
 def main() -> None:
     """Main runner."""
-    compare_dag1().save("test.png")
+    compare_simple_dags().save("simple_dags.png")
+    compare_dag1().save("dag1.png")
 
 
 if __name__ == "__main__":
