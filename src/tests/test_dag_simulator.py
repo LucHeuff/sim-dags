@@ -146,6 +146,7 @@ class DAGSimulatorStrategy:
     dist_seed: int
     sample_seed: int
     do: dict[str, int | bool]
+    rename_do: bool
 
 
 @st.composite
@@ -161,6 +162,7 @@ def dag_simulator_strategy(draw: st.DrawFn) -> DAGSimulatorStrategy:
     sample_seed = draw(st.integers(min_value=0))
     alpha = draw(st.integers(min_value=1, max_value=5))
     size = draw(st.integers(min_value=10, max_value=100))
+    rename_do = draw(st.booleans())
 
     dag = sample_dag(nodes, dag_seed)
 
@@ -168,7 +170,7 @@ def dag_simulator_strategy(draw: st.DrawFn) -> DAGSimulatorStrategy:
     do = draw(sample_interventions(distributions))
 
     return DAGSimulatorStrategy(
-        distributions, alpha, size, dist_seed, sample_seed, do
+        distributions, alpha, size, dist_seed, sample_seed, do, rename_do
     )
 
 
@@ -178,5 +180,7 @@ def test_dag_simulator(s: DAGSimulatorStrategy) -> None:
     """Randomised test of DAGSimulator."""
     dag_simulator = DAGSimulator(s.distributions, s.alpha, s.dist_seed)
 
-    samples = dag_simulator.sample(s.size, s.sample_seed, do=s.do)
+    samples = dag_simulator.sample(
+        s.size, s.sample_seed, do=s.do, rename_do=s.rename_do
+    )
     assert len(samples) == s.size, "size does not match set value."

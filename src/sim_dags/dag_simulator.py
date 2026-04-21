@@ -284,6 +284,7 @@ class DAGSimulator:
         seed: int = 0,
         *,
         do: dict[str, int | bool] | None = None,
+        rename_do: bool = True,
     ) -> pl.DataFrame:
         """Sample from the DAG.
 
@@ -294,6 +295,8 @@ class DAGSimulator:
             do (Optional): dictionary of intervention variables.
                         set {"x" : 1} for do(x) = 1
                         or {"x": True} to give all values of x an equal probability.
+            rename_do (Optional): whether to rename intervened variables
+                                (e.g x -> do(x)). Defaults to True.
 
         Returns:
             polars.DataFrame containing samples.
@@ -322,5 +325,8 @@ class DAGSimulator:
                 ancestors = nx.ancestors(self.graph, node)
                 inputs = np.asarray([results[anc] for anc in ancestors])
                 results[node] = generator.sample(inputs, size, seed)
+
+        # applying rename only if desired.
+        rename = rename if rename_do else {}
 
         return self.schema.validate(pl.DataFrame(results)).rename(rename)
