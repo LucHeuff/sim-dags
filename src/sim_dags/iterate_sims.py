@@ -1,5 +1,4 @@
 from functools import reduce
-from itertools import starmap
 from typing import Protocol
 
 import altair as alt
@@ -9,7 +8,7 @@ import polars as pl
 from sim_dags.dag_simulator import DAGSimulator
 
 
-class SimulateFunction(Protocol):  # noqa: D101
+class CompareFunction(Protocol):  # noqa: D101
     def __call__(self, size: int, seed: int) -> pl.DataFrame: ...  # noqa: D102
 
 
@@ -17,18 +16,18 @@ class EstimandFunction(Protocol):  # noqa: D101
     def __call__(self, samples: pl.DataFrame) -> pl.DataFrame: ...  # noqa: D102
 
 
-sim_schema = pa.DataFrameSchema(
+compare_schema = pa.DataFrameSchema(
     columns={"estimand": pa.Column(str), "value": pa.Column(float)}, strict=True
 )
 
 
-def build_simulate_function(
+def build_compare_function(
     dag_simulator: DAGSimulator,
     intervention: EstimandFunction,
     estimands: dict[str, EstimandFunction],
     obs_do: dict[str, int | bool] | None = None,
     true_do: dict[str, int | bool] | None = None,
-) -> SimulateFunction:
+) -> CompareFunction:
     """Build a CompareFunction for use in iterate_samples().
 
     Assumes that all the distributions have the same relevant variables
@@ -78,7 +77,7 @@ def build_simulate_function(
 
 
 def iterate_samples(
-    sim: SimulateFunction,
+    compare: CompareFunction,
     n_sizes: int = 5,
     n_seeds: int = 10,
     start_order: int = 2,
@@ -87,7 +86,7 @@ def iterate_samples(
     """Iterate over generated samples.
 
     Args:
-        sim: SimulateFunction returning a single comparison DataFrame for iteration
+        compare: CompareFunction returning a single comparison DataFrame for iteration
             DataFrame must consist of an "estimand" column
                and a "value" column containing the value of interest
         n_sizes: number of orders of magnitude for size.
@@ -100,12 +99,17 @@ def iterate_samples(
     """
     assert n_seeds > 1, f"n_seeds must be greater than 1, got {n_seeds}"
 
-    def get_sims(sim: SimulateFunction, size: int, seed_offset: int) -> pl.DataFrame:
+    def get_sims(
+        compare: CompareFunction, size: int, seed_offset: int
+    ) -> pl.DataFrame:
         seeds = [seed_offset + n for n in range(n_seeds)]
 
         return (
             pl.concat(
-                [sim_schema.validate(sim(size=size, seed=seed)) for seed in seeds]
+                [
+                    compare_schema.validate(compare(size=size, seed=seed))
+                    for seed in seeds
+                ]
             )
             .group_by("estimand")
             .agg(
@@ -121,11 +125,11 @@ def iterate_samples(
 
     assert n_sizes >= 1, f"n_sizes must be >= 1, got {n_sizes} "
 
-    def get_sizes(sim: CompareFunction, seed_offset: int) -> pl.DataFrame:
+    def get_sizes(compare: CompareFunction, seed_offset: int) -> pl.DataFrame:
         sizes = [10**n for n in range(start_order, start_order + n_sizes)]
-        return pl.concat([get_sims(sim, s, seed_offset) for s in sizes])
+        return pl.concat([get_sims(compare, s, seed_offset) for s in sizes])
 
-    return get_sizes(sim, seed_offset)
+    return get_sizes(compare, seed_offset)
 
 
 def plot_samples(data: pl.DataFrame) -> alt.LayerChart:

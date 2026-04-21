@@ -1,6 +1,6 @@
 from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
 from sim_dags.iterate_sims import (
-    build_simulate_function,
+    build_compare_function,
     iterate_samples,
     plot_samples,
 )
@@ -20,7 +20,7 @@ def test_iterate_sims() -> None:
 
     est_ = "∑z P(y|x,z)P(z)"
 
-    sim_func = build_simulate_function(
+    sim_func = build_compare_function(
         dag_simulator,
         intervention=lambda samples: p(samples, "y|x", name="do"),
         estimands={

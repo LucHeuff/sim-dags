@@ -6,8 +6,8 @@ from sim_dags.example_generators import (
     generate_dag1,
 )
 from sim_dags.iterate_sims import (
-    SimulateFunction,
-    build_simulate_function,
+    CompareFunction,
+    build_compare_function,
     iterate_samples,
     plot_samples,
 )
@@ -16,10 +16,10 @@ from sim_dags.utils import Chart, default_chart_config, to_df
 
 
 # slightly more involved due to having three simple DAGs
-def get_simple_generator(gen: DAGSimulator) -> SimulateFunction:
+def get_simple_generator(gen: DAGSimulator) -> CompareFunction:
     """Makes a SimulateFunction for the chosen generator."""
     sum_ = "∑z P(y|x,z)P(z)"
-    return build_simulate_function(
+    return build_compare_function(
         gen,
         intervention=lambda samples: p(samples, "y|x", name="do"),
         # calculating ∑z P(y|x,z)P(z) using p_arrays
