@@ -9,3 +9,4 @@ from sim_dags.probability import (
     p,
     p_array,
 )
+from sim_dags.utils import to_df
