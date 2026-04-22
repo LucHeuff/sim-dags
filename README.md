@@ -33,14 +33,14 @@ dag_simulator = DAGSimulator(distributions)
 `DAGSimulator` has a `sample` method to perform sampling from the DAG, returning samples in the form of a `polars.DataFrame`. 
 
 ```python
-SIZE = 100
-SEED = 12345
-observations = dag_simulator.sample(SIZE, SEED)
+size = 100
+seed = 12345
+observations = dag_simulator.sample(size, seed)
 ```
 To sample interventions, use the `do` argument of `sample`. This argument expects a dictionary of variables to intervene on, and how to intervene on them.
 For example, `{"X": True}` will intervene on $X$ by uniformly sampling from $X$'s catgories. `{"Z": 1}` will set all $Z$ to the value 1. 
-```
-interventions = dag_simulator.sample(SIZE, SEED, do={"X": True, "Z": 1})
+```python
+interventions = dag_simulator.sample(size, seed, do={"X": True, "Z": 1})
 
 ```
 For more examples see [`example_generators.py`](https://github.com/LucHeuff/sim-dags/blob/main/src/sim_dags/example_generators.py).
@@ -65,6 +65,8 @@ Where the resulting `pl.DataFrame` is expected to have the following columns:
 You can implement this function however you see fit, but the package provides `build_compare_function` for convenience.
 To implement the comparison from the example above, use
 ```python
+from sim_dags import build_compare_function, p, p_array, to_df
+
 compare = build_compare_function(
     dag_simulator,
     intervention=lambda samples: p(samples, "y|x", name="do"),  # Make sure to add name='do'! 
