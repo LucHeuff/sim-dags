@@ -1,9 +1,12 @@
 import altair as alt
 import polars as pl
 
-from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
+from sim_dags.dag_simulator import DAGSimulator
 from sim_dags.example_generators import (
-    generate_dag1,
+    get_collider_simulator,
+    get_dag1_simulator,
+    get_fork_simulator,
+    get_pipe_simulator,
 )
 from sim_dags.iterate_sims import (
     CompareFunction,
@@ -15,7 +18,8 @@ from sim_dags.probability import p, p_array
 from sim_dags.utils import Chart, default_chart_config, to_df
 
 
-# slightly more involved due to having three simple DAGs
+# slightly more involved due to having three simple DAGs,
+# but this function simple makes a SimulateFunction for the simple DAGSimulators
 def get_simple_generator(gen: DAGSimulator) -> CompareFunction:
     """Makes a SimulateFunction for the chosen generator."""
     sum_ = "∑z P(y|x,z)P(z)"
@@ -35,27 +39,9 @@ def get_simple_generator(gen: DAGSimulator) -> CompareFunction:
 
 def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart:
     """Generate comparison for simple DAGs."""
-    pipe = DAGSimulator(
-        distributions=[
-            Categorical("x", 3),
-            Categorical("z", 4, ["x"]),
-            Binomial("y", ["x", "z"]),
-        ]
-    )
-    fork = DAGSimulator(
-        distributions=[
-            Categorical("z", 4),
-            Categorical("x", 4, ["z"]),
-            Binomial("y", ["x", "z"]),
-        ]
-    )
-    collider = DAGSimulator(
-        distributions=[
-            Categorical("x", 3),
-            Binomial("y", ["x"]),
-            Categorical("z", 4, ["x", "y"]),
-        ]
-    )
+    pipe = get_pipe_simulator()
+    fork = get_fork_simulator()
+    collider = get_collider_simulator()
 
     pipe_chart = plot_samples(
         iterate_samples(get_simple_generator(pipe), n_sizes=n_sizes, n_seeds=n_seeds)
@@ -86,20 +72,26 @@ def compare_dag1(n_sizes: int = 5, n_seeds: int = 10) -> Chart:
     wrong_est_ = "∑w P(y|x, w)P(w)"
     est_ = "∑w ∑z P(y|x, z, w)P(z)P(w)"
 
-    def sim_func(size: int, seed: int) -> pl.DataFrame:
-        sim = generate_dag1(size=size, seed=seed)
-        do_sim = generate_dag1(size=size, seed=seed, do_x=True)
+    simulator = get_dag1_simulator()
 
-        py_x = p(sim, "y|x")
-        py_do_x = p(do_sim, "y|do(x)")
+    def sim_func(size: int, seed: int) -> pl.DataFrame:
+        samples = simulator.sample(size=size, seed=seed)
+        do_samples = simulator.sample(size=size, seed=seed, do={"x": True})
+
+        py_x = p(samples, "y|x")
+        py_do_x = p(do_samples, "y|do(x)")
 
         est = to_df(
-            (p_array(sim, "y|x, z, w") * p_array(sim, "z") * p_array(sim, "w"))
+            (
+                p_array(samples, "y|x, z, w")
+                * p_array(samples, "z")
+                * p_array(samples, "w")
+            )
             .sum(dim=["z", "w"])
             .rename(est_)
         )
         wrong_est = to_df(
-            (p_array(sim, "y|x,w") * p_array(sim, "w"))
+            (p_array(samples, "y|x,w") * p_array(samples, "w"))
             .sum(dim="w")
             .rename(wrong_est_)
         )

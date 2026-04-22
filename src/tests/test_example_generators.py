@@ -1,38 +1,54 @@
 from sim_dags.example_generators import (
-    generate_collider,
-    generate_dag1,
-    generate_fork,
-    generate_pipe,
+    get_collider_simulator,
+    get_dag1_simulator,
+    get_fork_simulator,
+    get_pipe_simulator,
 )
 
 
-def test_generate_pipe() -> None:
-    """Test generate_pipe."""
-    size, seed = 100, 12345
-    sim = generate_pipe(size, seed)
+def test_get_pipe_simulator() -> None:
+    """Test get_pipe_simulator()."""
+    size, seed = 100, 12346
+    sim = get_pipe_simulator()
 
-    assert len(sim) == size, "Samples have the wrong size"
+    samples = sim.sample(size, seed)
+    do_samples = sim.sample(size, seed, do={"x": True})
 
-
-def test_generate_fork() -> None:
-    """Test generate_fork."""
-    size, seed = 100, 12345
-    sim = generate_fork(size, seed)
-
-    assert len(sim) == size, "Samples have the wrong size"
+    assert len(samples) == size, "samples have incorrect size"
+    assert len(do_samples) == size, "do_samples have incorrect size"
 
 
-def test_generate_collider() -> None:
-    """Test generate_collider."""
-    size, seed = 100, 12345
-    sim = generate_collider(size, seed)
+def test_get_fork_simulator() -> None:
+    """Test get_fork_simulator()."""
+    size, seed = 100, 12346
+    sim = get_fork_simulator()
 
-    assert len(sim) == size, "Samples have the wrong size"
+    samples = sim.sample(size, seed)
+    do_samples = sim.sample(size, seed, do={"x": True})
+
+    assert len(samples) == size, "samples have incorrect size"
+    assert len(do_samples) == size, "do_samples have incorrect size"
 
 
-def test_generate_dag1() -> None:
-    """Test generate_dag1."""
-    size, seed = 100, 12345
-    sim = generate_dag1(size, seed)
+def test_get_collider_simulator() -> None:
+    """Test get_collider_simulator()."""
+    size, seed = 100, 12346
+    sim = get_collider_simulator()
 
-    assert len(sim) == size, "Samples have the wrong size"
+    samples = sim.sample(size, seed)
+    do_samples = sim.sample(size, seed, do={"x": True})
+
+    assert len(samples) == size, "samples have incorrect size"
+    assert len(do_samples) == size, "do_samples have incorrect size"
+
+
+def test_get_dag1_simulator() -> None:
+    """Test get_dag1_simulator()."""
+    size, seed = 100, 12346
+    sim = get_dag1_simulator()
+
+    samples = sim.sample(size, seed)
+    do_samples = sim.sample(size, seed, do={"x": True})
+
+    assert len(samples) == size, "samples have incorrect size"
+    assert len(do_samples) == size, "do_samples have incorrect size"
