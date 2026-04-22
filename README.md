@@ -15,7 +15,7 @@ uv add git+https://github.com/LucHeuff/sim-dags.git
 
 ## `DAGSimulator`
 
-The core of this package revolves around the `DAGSimulator`, which constructs and validates a DAG from a list of `Distribution`s, and allows sampling from the graph, optionally with interventions.
+The core of this package revolves around the `DAGSimulator`, which constructs and validates a DAG from a list of `Distribution`, and allows sampling from the graph, optionally with interventions.
 Since DAG validation is non-parameteric, to keep the validation as simple as possible the only available distributions are the `Categorical` and the `Binomial`.
 For example, to generate a `DAGSimulator` for the DAG $X \rightarrow Z \rightarrow Y$ one would simply use:
 
@@ -101,7 +101,7 @@ In order to validate results calculated using _do_-calculus, probability distrib
 This is what the `p` and `p_array` functions are for. These both calculate (conditional) distributions from a given `polars.DataFrame`.
 `p` returns a `polars.DataFrame`, while `p_array` returns a `xarray.DataArray`, which is more convenient when calculating products of multiple distributions.
 
-To convert `xarray.DataArray`s into `polars.DataFrame`s, the `to_df` convenience function is provided.
+To convert `xarray.DataArray` into `polars.DataFrame`, the `to_df` convenience function is provided.
 
 
 
