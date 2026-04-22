@@ -43,7 +43,7 @@ For example, `{"X": True}` will intervene on $X$ by uniformly sampling from $X$'
 interventions = dag_simulator.sample(SIZE, SEED, do={"X": True, "Z": 1})
 
 ```
-For more examples see `src/sim_dags/example_generators.py`.
+For more examples see [`example_generators.py`](https://github.com/LucHeuff/sim-dags/blob/main/src/sim_dags/example_generators.py).
 
 ## Validation
 
@@ -54,7 +54,7 @@ from simulations and then calculating the Euclidian distance between these. You 
 This package provides convenience functions to graph these validations through the `iterate_samples` and `plot_samples` functions.
 
 `iterate_samples` iterates sample generation and compares these using a provided `CompareFunction`, with the following signature:
-```
+```python
 def compare(size: int, seed: int) -> pl.DataFrame: ...
     "Compare estimands with interventions."
 ```
@@ -64,7 +64,7 @@ Where the resulting `pl.DataFrame` is expected to have the following columns:
 
 You can implement this function however you see fit, but the package provides `build_compare_function` for convenience.
 To implement the comparison from the example above, use
-```
+```python
 compare = build_compare_function(
     dag_simulator,
     intervention=lambda samples: p(samples, "y|x", name="do"),  # Make sure to add name='do'! 
@@ -91,7 +91,7 @@ so with `n_sizes=3` the estimands will be compared at sample sizes of 100, 100 a
 
 The `plot_samples` function is designed to graph these results into an [`altair`](https://altair-viz.github.io/) chart, which can then be used like any other `altair` chart.
 
-For more examples see `src/sim_dags/example_validation.py`
+For more examples see [`example_validation.py`](https://github.com/LucHeuff/sim-dags/blob/main/src/sim_dags/example_validation.py).
 
 ## Probability
 
