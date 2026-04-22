@@ -27,7 +27,7 @@ class Distribution(Protocol):
 
     name: str
     categories: int
-    ancestors: list[str]
+    parents: list[str]
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class Categorical:
 
     name: str
     categories: int = Field(ge=1)
-    ancestors: list[str] = Field(default_factory=list)
+    parents: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class Binomial:
     """Binomial distribution, always has 2 categories (0 and 1)."""
 
     name: str
-    ancestors: list[str] = Field(default_factory=list)
+    parents: list[str] = Field(default_factory=list)
     categories: int = Field(default=2, init=False)
 
 
@@ -61,9 +61,9 @@ class Generator(ABC):
         return _get_do_name(self.distribution.name)
 
     @property
-    def ancestors(self) -> int:
+    def parents(self) -> int:
         """Get the number of ancestors for this variable."""
-        return len(self.distribution.ancestors)
+        return len(self.distribution.parents)
 
     @property
     def name(self) -> str:
@@ -73,8 +73,8 @@ class Generator(ABC):
     def _check_inputs(self, inputs: np.ndarray) -> None:
         """Check if inputs have the expected length."""
         shape = inputs.shape[0]
-        assert shape == self.ancestors, (
-            f"Got {shape} inputs when '{self.name}' has {self.ancestors} ancestors."
+        assert shape == self.parents, (
+            f"Got {shape} inputs when '{self.name}' has {self.parents} parents."
         )
 
     def _check_samples(self, samples: np.ndarray, size: int) -> np.ndarray:
@@ -117,14 +117,14 @@ class CategoricalGenerator(Generator):
     def __init__(
         self,
         variable: Categorical,
-        ancestors: list[Distribution],
+        parents: list[Distribution],
         seed: int,
         alpha: int,
     ) -> None:
         """Set parameters for this generator."""
         self.distribution = variable
 
-        shape = [anc.categories for anc in ancestors] if len(ancestors) > 0 else ()
+        shape = [p.categories for p in parents] if len(parents) > 0 else ()
         rng = np.random.default_rng(seed)
 
         # dirichlet distribution with number of categories of current variable
@@ -137,8 +137,8 @@ class CategoricalGenerator(Generator):
         """Generate categorical samples without intervention."""
         self._check_inputs(inputs)
         rng = np.random.default_rng(seed)
-        p = self.parameters[*inputs] if self.ancestors != 0 else self.parameters
-        s = None if self.ancestors != 0 else size
+        p = self.parameters[*inputs] if self.parents != 0 else self.parameters
+        s = None if self.parents != 0 else size
         samples = rng.multinomial(1, pvals=p, size=s).argmax(axis=1)
         return self._check_samples(samples, size)
 
@@ -168,13 +168,12 @@ class BinomialGenerator(Generator):
     def __init__(
         self,
         variable: Binomial,
-        ancestors: list[Distribution],
+        parents: list[Distribution],
         seed: int,
     ) -> None:
         """Set parameters for this generator."""
         self.distribution = variable
-        shape = [anc.categories for anc in ancestors] if len(ancestors) > 0 else ()
-
+        shape = [p.categories for p in parents] if len(parents) > 0 else ()
         rng = np.random.default_rng(seed)
         self.parameters = rng.uniform(size=shape)
 
@@ -182,8 +181,9 @@ class BinomialGenerator(Generator):
         """Generate binomial samples without intervention."""
         self._check_inputs(inputs)
         rng = np.random.default_rng(seed)
-        p = self.parameters[*inputs] if self.ancestors != 0 else self.parameters
-        s = None if self.ancestors != 0 else size
+        p = self.parameters[*inputs] if self.parents != 0 else self.parameters
+        s = None if self.parents != 0 else size
+
         samples = rng.binomial(1, p=p, size=s)
         return self._check_samples(samples, size)
 
@@ -230,7 +230,7 @@ class DAGSimulator:
 
         # setting up the DAG from the provided distributions
         nodes = self.distributions.keys()
-        edges = [(anc, d.name) for d in distributions for anc in d.ancestors]
+        edges = [(anc, d.name) for d in distributions for anc in d.parents]
 
         self.graph.add_nodes_from(nodes)
         self.graph.add_edges_from(edges)
@@ -250,14 +250,12 @@ class DAGSimulator:
         def get_generator(node: str) -> Generator:
             """Fetch generator for a specific node."""
             variable = self.distributions[node]
-            ancestors = [
-                self.distributions[anc] for anc in nx.ancestors(self.graph, node)
-            ]
+            parents = [self.distributions[p] for p in self.graph.predecessors(node)]
             match variable:
                 case Binomial():
-                    return BinomialGenerator(variable, ancestors, seed)
+                    return BinomialGenerator(variable, parents, seed)
                 case Categorical():
-                    return CategoricalGenerator(variable, ancestors, seed, alpha)
+                    return CategoricalGenerator(variable, parents, seed, alpha)
                 case _:
                     msg = f"No known generator for {variable.__class__.__name__}"
                     raise UnknownDistributionError(msg)
@@ -322,8 +320,8 @@ class DAGSimulator:
                 results[node] = generator.do(do[node], size, seed)
                 rename[node] = generator.do_name
             else:
-                ancestors = nx.ancestors(self.graph, node)
-                inputs = np.asarray([results[anc] for anc in ancestors])
+                parents = list(self.graph.predecessors(node))
+                inputs = np.asarray([results[anc] for anc in parents])
                 results[node] = generator.sample(inputs, size, seed)
 
         # applying rename only if desired.

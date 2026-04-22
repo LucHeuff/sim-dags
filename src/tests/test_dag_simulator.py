@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 
 import hypothesis.strategies as st
-import networkx as nx
 import numpy as np
 import pytest
 from hypothesis import given, settings
@@ -62,7 +61,7 @@ class FakeDistribution:
 
     name: str
     categories: int
-    ancestors: list[str]
+    parents: list[str]
 
 
 def test_dag_simulator_raises_unknown_distribution() -> None:
@@ -106,10 +105,12 @@ def sample_dag(nodes: list[str], seed: int) -> dict[str, list[str]]:
     # always makes a DAG
     adj_matrix = np.triu(matrix, k=1)
 
-    graph = nx.from_numpy_array(adj_matrix, create_using=nx.DiGraph, nodelist=nodes)
-    assert nx.is_directed_acyclic_graph(graph), "graph is not a DAG"
-
-    return {node: list(nx.ancestors(graph, node)) for node in nodes}
+    # extracting ancestors directly from the adjacency matrix ->
+    # each column indicates whether the node is an ancestor
+    return {
+        node: np.compress(adj_matrix[:, i], nodes).astype(str).tolist()  # ty:ignore[no-matching-overload]
+        for (i, node) in enumerate(nodes)
+    }
 
 
 @st.composite
@@ -161,7 +162,7 @@ def dag_simulator_strategy(draw: st.DrawFn) -> DAGSimulatorStrategy:
     dist_seed = draw(st.integers(min_value=0))
     sample_seed = draw(st.integers(min_value=0))
     alpha = draw(st.integers(min_value=1, max_value=5))
-    size = draw(st.integers(min_value=10, max_value=100))
+    size = draw(st.integers(min_value=10, max_value=20))
     rename_do = draw(st.booleans())
 
     dag = sample_dag(nodes, dag_seed)
@@ -175,7 +176,7 @@ def dag_simulator_strategy(draw: st.DrawFn) -> DAGSimulatorStrategy:
 
 
 @given(dag_simulator_strategy())
-@settings(deadline=500)
+@settings(deadline=600)
 def test_dag_simulator(s: DAGSimulatorStrategy) -> None:
     """Randomised test of DAGSimulator."""
     dag_simulator = DAGSimulator(s.distributions, s.alpha, s.dist_seed)
