@@ -25,8 +25,8 @@ def build_compare_function(
     dag_simulator: DAGSimulator,
     intervention: EstimandFunction,
     estimands: dict[str, EstimandFunction],
-    obs_do: dict[str, int | bool] | None = None,
-    true_do: dict[str, int | bool] | None = None,
+    observation_do: dict[str, int | bool] | None = None,
+    intervention_do: dict[str, int | bool] | None = None,
 ) -> CompareFunction:
     """Build a CompareFunction for use in iterate_samples().
 
@@ -39,21 +39,21 @@ def build_compare_function(
         dag_simulator: DAGSimulator to build SimulateFunction from
         intervention: distribution of intervention. Should be named "do"
         estimands: list of names and distributions of estimands
-        obs_do: interventions on observations
-        true_do: intervention for true causal effect.
+        observation_do: (Optional) interventions on observations
+        intervention_do: (Optional, but recommended) intervention for true causal effect.
 
     Returns:
         CompareFunction tobe used in iterate_samples().
-    """
+    """  # noqa: E501
     est_names = estimands.keys()
     est_dists = estimands.values()
 
     def simulate_function(size: int, seed: int) -> pl.DataFrame:
         obs_samples = dag_simulator.sample(
-            size=size, seed=seed, do=obs_do, rename_do=False
+            size=size, seed=seed, do=observation_do, rename_do=False
         )
         do_samples = dag_simulator.sample(
-            size=size, seed=seed, do=true_do, rename_do=False
+            size=size, seed=seed, do=intervention_do, rename_do=False
         )
 
         do = intervention(do_samples)

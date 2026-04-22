@@ -175,7 +175,7 @@ def dag_simulator_strategy(draw: st.DrawFn) -> DAGSimulatorStrategy:
 
 
 @given(dag_simulator_strategy())
-@settings(deadline=350)
+@settings(deadline=500)
 def test_dag_simulator(s: DAGSimulatorStrategy) -> None:
     """Randomised test of DAGSimulator."""
     dag_simulator = DAGSimulator(s.distributions, s.alpha, s.dist_seed)

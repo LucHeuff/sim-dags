@@ -30,7 +30,7 @@ def test_iterate_sims() -> None:
                 .rename(est_)
             )
         },
-        true_do={"x": True},
+        intervention_do={"x": True},
     )
 
     n_sizes = 3
