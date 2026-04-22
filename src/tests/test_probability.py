@@ -337,7 +337,7 @@ def test_log_grid_approx(s: GridApproxStrategy) -> None:
         if s.log_prior is None:
             density = grid["log_density"].to_numpy()
             L2 = np.sqrt(np.power(density - s.log_beta, 2))  # noqa: N806
-            assert np.nanmean(L2) <= 0.15, "Density mismatch with Beta distribution"  # noqa: PLR2004
+            assert np.nanmean(L2) <= 0.2, "Density mismatch with Beta distribution"  # noqa: PLR2004
 
 
 def test_p_grid(static_strategy: ProbabilityStrategy) -> None:

@@ -125,13 +125,13 @@ def compare_dag1(n_sizes: int = 5, n_seeds: int = 10) -> Chart:
     )
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover
     """Main runner."""
     compare_simple_dags().save("simple_dags.png")
     compare_dag1().save("dag1.png")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     import subprocess
 
     subprocess.run(["clear"], shell=True, check=True)
