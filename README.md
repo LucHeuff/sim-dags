@@ -92,6 +92,8 @@ compare = build_compare_function(
 sims = iterate_simulations(compare, n_sizes=3, n_seeds=2) 
 plot_simulations(sims).save("demo.png")
 ```
+> Lambda functions are used here for brevity, but the function can of course be defined seperately as well.
+
 Here the function under `intervention` is applied to the intervention sample, which is generated using `intervention_sim`. 
 The estimands are applied to the observation sample, which is generated using `observation_sim`.
 The terminology 'intervention' and 'observation' is just to make clearer where which function are being applied, there is nothing stopping you from also applying interventions with the `observation` function.
