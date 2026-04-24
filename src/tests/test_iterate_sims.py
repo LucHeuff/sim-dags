@@ -1,8 +1,8 @@
 from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
 from sim_dags.iterate_sims import (
     build_compare_function,
-    iterate_samples,
-    plot_samples,
+    iterate_simulations,
+    plot_simulations,
 )
 from sim_dags.probability import p, p_array
 from sim_dags.utils import default_chart_config, to_df
@@ -21,19 +21,21 @@ def test_iterate_sims() -> None:
     est_ = "∑z P(y|x,z)P(z)"
 
     sim_func = build_compare_function(
-        dag_simulator,
-        intervention=lambda samples: p(samples, "y|x", name="do"),
-        estimands={
-            est_: lambda samples: to_df(
-                (p_array(samples, "y|x,z") * p_array(samples, "z"))
-                .sum(dim="z")
-                .rename(est_)
-            )
-        },
-        intervention_do={"x": True},
+        lambda size, seed: dag_simulator.sample(
+            size, seed, do={"x": 1}, rename_do=False
+        ),
+        lambda samples: p(samples, "y|x"),
+        dag_simulator.sample,
+        lambda samples: to_df(
+            (p_array(samples, "y|x,z") * p_array(samples, "z"))
+            .sum(dim="z")
+            .rename(est_)
+        ),
     )
 
     n_sizes = 3
     n_seeds = 2
 
-    default_chart_config(plot_samples(iterate_samples(sim_func, n_sizes, n_seeds)))
+    default_chart_config(
+        plot_simulations(iterate_simulations(sim_func, n_sizes, n_seeds))
+    )

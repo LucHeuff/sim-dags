@@ -1,14 +1,15 @@
-from functools import reduce
 from typing import Protocol
 
 import altair as alt
 import pandera.polars as pa
 import polars as pl
 
-from sim_dags.dag_simulator import DAGSimulator
-
 
 class CompareFunction(Protocol):  # noqa: D101
+    def __call__(self, size: int, seed: int) -> pl.DataFrame: ...  # noqa: D102
+
+
+class SimFunction(Protocol):  # noqa: D101
     def __call__(self, size: int, seed: int) -> pl.DataFrame: ...  # noqa: D102
 
 
@@ -22,11 +23,10 @@ compare_schema = pa.DataFrameSchema(
 
 
 def build_compare_function(
-    dag_simulator: DAGSimulator,
+    intervention_sim: SimFunction,
     intervention: EstimandFunction,
-    estimands: dict[str, EstimandFunction],
-    observation_do: dict[str, int | bool] | None = None,
-    intervention_do: dict[str, int | bool] | None = None,
+    observation_sim: SimFunction,
+    estimands: EstimandFunction | list[EstimandFunction],
 ) -> CompareFunction:
     """Build a CompareFunction for use in iterate_samples().
 
@@ -36,36 +36,47 @@ def build_compare_function(
     dataframes are assumed to have only "x" and "y" as columns.
 
     Args:
-        dag_simulator: DAGSimulator to build SimulateFunction from
-        intervention: distribution of intervention. Should be named "do"
-        estimands: list of names and distributions of estimands
-        observation_do: (Optional) interventions on observations
-        intervention_do: (Optional, but recommended) intervention for true causal effect.
+        intervention_sim: function(size, seed) that generates intervention samples
+        intervention: function(samples) that calculates intervention distribution
+        observation_sim: function(size, seed) that generates observation samples
+        estimands: (list of) function(samples) that calculates estimands distribution
 
     Returns:
         CompareFunction tobe used in iterate_samples().
-    """  # noqa: E501
-    est_names = estimands.keys()
-    est_dists = estimands.values()
+    """
+    estimands_: list[EstimandFunction] = (
+        estimands if isinstance(estimands, list) else [estimands]
+    )  # ty:ignore[invalid-assignment]
 
     def simulate_function(size: int, seed: int) -> pl.DataFrame:
-        obs_samples = dag_simulator.sample(
-            size=size, seed=seed, do=observation_do, rename_do=False
-        )
-        do_samples = dag_simulator.sample(
-            size=size, seed=seed, do=intervention_do, rename_do=False
+
+        int_ = intervention_sim(size, seed)
+        obs_ = observation_sim(size, seed)
+
+        do = intervention(int_)
+        # join columns should be the common columns between samples and intervention
+        on = set(do.columns) & set(int_.columns)
+        do_cols = set(do.columns).difference(on)
+        assert len(do_cols) == 1, "Intervention should only add one column."
+        do_col = next(iter(do_cols))
+
+        ests = pl.concat([est(obs_) for est in estimands_], how="align")
+        assert ests.null_count().sum_horizontal().item() == 0, (
+            "Nulls appear in estimands. Increase sample sizes, or make sure to set p(*, include_zeros=True) on any of the relevant distributions."  # noqa: E501
         )
 
-        do = intervention(do_samples)
-        assert "do" in do.columns, "intervention distribution should be named 'do'."
-        on = [col for col in do.columns if col != "do"]
-        ests = [est_dist(obs_samples) for est_dist in est_dists]
+        # figuring out join columns for estimands
+        on_ = set(ests.columns) & set(obs_.columns)
+        assert on == on_, (
+            f"intervention and estimands should result in the same common columns,\nbut got {on} for intervention and {on_} for estimands.\nIf you are using interventions, remember to set rename_do=False as a parameter on DAGSimulator.sample!"  # noqa: E501
+        )
+        est_names = list(set(ests.columns).difference(on_))
 
         return (
-            reduce(lambda left, right: left.join(right, on=on), [do, *ests])
+            do.join(ests, on=list(on))
             .with_columns(
                 [
-                    (pl.col("do") - pl.col(est_name)).pow(2).sqrt().alias(est_name)
+                    (pl.col(do_col) - pl.col(est_name)).pow(2).sqrt().alias(est_name)
                     for est_name in est_names
                 ]
             )
@@ -76,7 +87,7 @@ def build_compare_function(
     return simulate_function
 
 
-def iterate_samples(
+def iterate_simulations(
     compare: CompareFunction,
     n_sizes: int = 5,
     n_seeds: int = 10,
@@ -96,7 +107,7 @@ def iterate_samples(
 
     Returns:
         pl.DataFrame with combined results per iteration
-    """
+    """  # noqa: E501
     assert n_seeds > 1, f"n_seeds must be greater than 1, got {n_seeds}"
 
     def get_sims(
@@ -132,7 +143,7 @@ def iterate_samples(
     return get_sizes(compare, seed_offset)
 
 
-def plot_samples(data: pl.DataFrame) -> alt.LayerChart:
+def plot_simulations(data: pl.DataFrame) -> alt.LayerChart:
     """Plot data generated by iterate_samples()."""
     base = (
         alt.Chart(data)

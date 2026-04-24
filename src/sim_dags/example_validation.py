@@ -11,8 +11,8 @@ from sim_dags.example_generators import (
 from sim_dags.iterate_sims import (
     CompareFunction,
     build_compare_function,
-    iterate_samples,
-    plot_samples,
+    iterate_simulations,
+    plot_simulations,
 )
 from sim_dags.probability import p, p_array
 from sim_dags.utils import Chart, default_chart_config, to_df
@@ -20,20 +20,24 @@ from sim_dags.utils import Chart, default_chart_config, to_df
 
 # slightly more involved due to having three simple DAGs,
 # but this function simple makes a SimulateFunction for the simple DAGSimulators
-def get_simple_generator(gen: DAGSimulator) -> CompareFunction:
+def get_simple_generator(dag_simulator: DAGSimulator) -> CompareFunction:
     """Makes a SimulateFunction for the chosen generator."""
     sum_ = "∑z P(y|x,z)P(z)"
+
     return build_compare_function(
-        gen,
-        intervention=lambda samples: p(samples, "y|x", name="do"),
-        # calculating ∑z P(y|x,z)P(z) using p_arrays
-        estimands={
-            sum_: lambda samples: to_df(
+        lambda size, seed: dag_simulator.sample(
+            size, seed, do={"x": True}, rename_do=False
+        ),
+        lambda samples: p(samples, "y|x"),
+        dag_simulator.sample,
+        [
+            lambda samples: p(samples, "y|x"),
+            lambda samples: to_df(
                 (p_array(samples, "y|x,z") * p_array(samples, "z"))
                 .sum(dim="z")
                 .rename(sum_)
-            )
-        },
+            ),
+        ],
     )
 
 
@@ -43,14 +47,18 @@ def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart
     fork = get_fork_simulator()
     collider = get_collider_simulator()
 
-    pipe_chart = plot_samples(
-        iterate_samples(get_simple_generator(pipe), n_sizes=n_sizes, n_seeds=n_seeds)
+    pipe_chart = plot_simulations(
+        iterate_simulations(
+            get_simple_generator(pipe), n_sizes=n_sizes, n_seeds=n_seeds
+        )
     ).properties(title="Comparison for Pipe DAG (correct: P(y|x))")
-    fork_chart = plot_samples(
-        iterate_samples(get_simple_generator(fork), n_sizes=n_sizes, n_seeds=n_seeds)
+    fork_chart = plot_simulations(
+        iterate_simulations(
+            get_simple_generator(fork), n_sizes=n_sizes, n_seeds=n_seeds
+        )
     ).properties(title="Comparison for Fork DAG (correct: ∑z P(y|x,z)P(z))")
-    collider_chart = plot_samples(
-        iterate_samples(
+    collider_chart = plot_simulations(
+        iterate_simulations(
             get_simple_generator(collider), n_sizes=n_sizes, n_seeds=n_seeds
         )
     ).properties(title="Comparison for Collider DAG (correct: P(y|x))")
@@ -116,7 +124,7 @@ def compare_dag1(n_sizes: int = 5, n_seeds: int = 10) -> Chart:
 
     return (
         default_chart_config(
-            plot_samples(iterate_samples(sim_func, n_sizes, n_seeds))
+            plot_simulations(iterate_simulations(sim_func, n_sizes, n_seeds))
         )
         .properties(
             title="Comparison of DAG 1 (correct: ∑w ∑z P(y|x, z, w)P(z)P(w))"
