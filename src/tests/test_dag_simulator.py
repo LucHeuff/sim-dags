@@ -52,7 +52,7 @@ def test_over(graph: nx.DiGraph) -> None:
     )
 
 
-def test_(graph: nx.DiGraph) -> None:
+def test_under(graph: nx.DiGraph) -> None:
     """Test _under()."""
     assert set(_under(graph, ["a"]).edges) == {("b", "c")}, (
         "under(a) edges incorrect"
@@ -125,6 +125,9 @@ def test_basic_dag_simulator(simulator: DAGSimulator) -> None:
     simulator.backdoor_criterion("x", "z")
     simulator.backdoor_criterion("z", "y")
     simulator.backdoor_criterion("x", "y", do=["z"])
+
+    simulator.conditional_independencies()
+    simulator.conditional_independencies(do=["x"])
 
 
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:

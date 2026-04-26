@@ -45,6 +45,12 @@ interventions = dag_simulator.sample(size, seed, do={"X": True, "Z": 1})
 ```
 For more examples see [`example_generators.py`](https://github.com/LucHeuff/sim-dags/blob/main/src/sim_dags/example_generators.py).
 
+The `DAGSimulator` also provides the `backdoor_criterion` and `conditional_independencies` methods.
+`backdoor_criterion("x", "y")` calculates the required adjustment set for $X \rightarrow Y$ in the current DAG using the backdoor criterion.
+Optionally the `do` argument can be used to apply the backdoor criterion under interventions on different variables.
+
+`conditional_independencies` shows the conditional independencies that are implied by the DAG. Again, this contains an optional `do` argument to calculate conditional independencies under some intervention.
+
 ## Validation
 
 Once you have simulated your samples, one way to validate your estimands is by comparing them to simulated interventions.
@@ -119,4 +125,5 @@ This is what the `p` and `p_array` functions are for. These both calculate (cond
 - `include_zeros`: whether you want to include cases that do not appear in the data, meaning they have zero probability. Turned off by default, and only available for `p`.
 
 To convert `xarray.DataArray` into `polars.DataFrame`, the `to_df` convenience function is provided.
+
 

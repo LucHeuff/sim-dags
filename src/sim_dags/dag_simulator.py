@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from functools import cached_property
 from itertools import combinations
 from typing import Protocol
 
@@ -392,7 +393,7 @@ class DAGSimulator:
 
         return self.schema.validate(pl.DataFrame(results)).rename(rename)
 
-    @property
+    @cached_property
     def unobserved(self) -> set[str]:
         """Return list of unobserved nodes."""
         return {d.name for d in self.distributions.values() if d.unobserved}
@@ -400,7 +401,17 @@ class DAGSimulator:
     def backdoor_criterion(
         self, exposure: str, outcome: str, do: list[str] | None = None
     ) -> None:
-        """Look for an adjustment set thorugh the backdoor criterion."""
+        """Find and display adjustment sets using the backdoor criterion.
+
+        Args:
+            exposure: variable from where the causal path starts
+            outcome: variable where the causal path ends
+            do (Optional): list of variables that are intervened on.
+
+        Returns:
+            Nothing, but prints adjustment sets to the terminal.
+
+        """
         # should make sure the desired causal path exists in the first place
         if not nx.has_path(self.graph, exposure, outcome):
             msg = f"The path {exposure} -> {outcome} does not appear in the DAG."
@@ -445,8 +456,6 @@ class DAGSimulator:
             msg += "No open backdoor paths found, so no adjustment is necessary."
             return print(msg)  # noqa: T201
 
-        print(f"{open_paths}")
-
         # Adding open paths to the message, a bit involved due to tuples not joining
         str_paths = [f"[{','.join(list(path))}]" for path in open_paths]
         n = len(open_paths)
@@ -474,19 +483,53 @@ class DAGSimulator:
         msg += f"Available adjustment sets:\n  {'\n  '.join(str_adj)}"
         return print(msg)  # noqa: T201
 
-    # TODO implementeren!
-    def conditional_independencies(self) -> None:
-        # TODO opsplitsen in testable vs untestable (met unobserved variabelen)
-        pass
-
-    # TODO handmatig implementeren (of kiezen om niet te doen)
-    def chart(self, do: list[str] | None = None) -> alt.Chart:
-        """Generate an altair chart from the dag.
+    def conditional_independencies(self, do: list[str] | None = None) -> None:
+        """Display implied conditional independencies for this DAG.
 
         Args:
-            do (Optional): list of nodes to intervene on.
+            do (Optional): variables that are being intervened on.
 
         Returns:
-            altair Chart
-
+            Nothing, but prints conditional independencies to the console.
         """
+        # Applying
+        do = [] if do is None else do
+        graph = _over(self.graph, do)
+        testable = {}
+        untestable = {}
+        for c in combinations(graph.nodes, 2):
+            left, right = c
+            indep = nx.find_minimal_d_separator(graph, left, right)
+            if indep is not None:
+                if left in self.unobserved or right in self.unobserved:
+                    untestable[f"{left} ⫫ {right}"] = list(indep)
+                else:
+                    testable[f"{left} ⫫ {right}"] = list(indep)
+
+        if len(testable) == 0 and len(untestable) == 0:
+            msg = "The model does not imply any conditional independencies."
+            return print(msg)  # noqa: T201
+
+        msg = "The model implies the following conditional independencies"
+
+        if len(do) > 0:
+            str_do = [f"do({var})" for var in do]
+            msg += " under " + ",".join(str_do)
+
+        msg += ":"
+
+        def stringify(d: dict[str, list[str]]) -> str:
+
+            return "\n  ".join(
+                [
+                    f"{ind} | " + ",".join(list(s)) if len(s) > 0 else ind
+                    for ind, s in d.items()
+                ]
+            )
+
+        if len(testable) > 0:
+            msg += f"\nTestable:\n  {stringify(testable)}"
+        if len(untestable) > 0:
+            msg += f"\nUntestable (some variables are unobserved):\n  {stringify(untestable)}"  # noqa: E501
+
+        return print(msg)  # noqa: T201
