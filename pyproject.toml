@@ -8,7 +8,7 @@ authors = [
   { name = "Luc Heuff", email = "10941592+LucHeuff@users.noreply.github.com" }
 ]
 dependencies = [
-  "altair[all]>=6.0.0",
+  "altair>=6.1.0",
   "networkx>=3.6.1",
   "pandera[polars]>=0.29.0",
   "polars>=1.38.1",
