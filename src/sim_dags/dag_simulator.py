@@ -4,7 +4,6 @@ from functools import cached_property
 from itertools import combinations
 from typing import Protocol
 
-import altair as alt
 import networkx as nx
 import numpy as np
 import pandera.polars as pa
