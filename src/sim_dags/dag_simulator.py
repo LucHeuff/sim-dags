@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from itertools import combinations
 from typing import Protocol
 
+import altair as alt
 import networkx as nx
 import numpy as np
 import pandera.polars as pa
@@ -28,6 +30,7 @@ class Distribution(Protocol):
     name: str
     categories: int
     parents: list[str]
+    unobserved: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class Categorical:
     name: str
     categories: int = Field(ge=1)
     parents: list[str] = Field(default_factory=list)
+    unobserved: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class Binomial:
     name: str
     parents: list[str] = Field(default_factory=list)
     categories: int = Field(default=2, init=False)
+    unobserved: bool = False
 
 
 class Generator(ABC):
@@ -198,6 +203,64 @@ class BinomialGenerator(Generator):
         return self._check_samples(samples, size)
 
 
+def _over(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
+    """Remove edges pointing into variables from graph."""
+    g = graph.copy()
+    edges = [edge for edge in g.edges if edge[1] in variables]
+    g.remove_edges_from(edges)
+    return g
+
+
+def _under(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
+    """Remove edges coming out of variables from graph."""
+    g = graph.copy()
+    edges = [edge for edge in g.edges if edge[0] in variables]
+    g.remove_edges_from(edges)
+    return g
+
+
+def _find_minimal_adjustment_set(
+    available: list[str], open_paths: list[list[str]]
+) -> list[list[str]] | None:
+    """Find minimal adjustment set for these variables."""
+    # If there are no available nodes, then there is no adjustment set
+    if len(available) == 0:
+        return None
+
+    # Finding how often each node appears in the open paths
+    frequency = [
+        (node, sum(node in path for path in open_paths)) for node in available
+    ]
+    # if any single node appears as often as the number of open paths,
+    # combinations do not need to be searched.
+
+    if (max_ := max(n for _, n in frequency)) == len(open_paths):
+        return [[node] for node, n in frequency if n == max_]
+
+    # Nodes that do not appear in any path are irrelevant, ignoring these
+    relevant = [node for node, n in frequency if n > 0]
+
+    if len(relevant) == 0:  # returning when none of the nodes are relevant
+        return None
+
+    adjustment = []
+    min_size = len(relevant) + 1  # adding 1 to avoid early stopping
+
+    for size in range(2, len(relevant) + 1):  # not using min_size cause that changes
+        # if we already found smaller sets than this, these aren't minimal.
+        if size > min_size:
+            break
+        # check for combinations of this size whether they close all open paths
+        for c in combinations(relevant, size):
+            if all(any(node in path for node in c) for path in open_paths):
+                adjustment.append(list(c))
+                min_size = min(
+                    len(c), min_size
+                )  # update min size if this is smaller
+
+    return adjustment if len(adjustment) > 0 else None
+
+
 class DAGSimulator:
     """Simulate samples from a DAG.
 
@@ -328,3 +391,102 @@ class DAGSimulator:
         rename = rename if rename_do else {}
 
         return self.schema.validate(pl.DataFrame(results)).rename(rename)
+
+    @property
+    def unobserved(self) -> set[str]:
+        """Return list of unobserved nodes."""
+        return {d.name for d in self.distributions.values() if d.unobserved}
+
+    def backdoor_criterion(
+        self, exposure: str, outcome: str, do: list[str] | None = None
+    ) -> None:
+        """Look for an adjustment set thorugh the backdoor criterion."""
+        # should make sure the desired causal path exists in the first place
+        if not nx.has_path(self.graph, exposure, outcome):
+            msg = f"The path {exposure} -> {outcome} does not appear in the DAG."
+            return print(msg)  # noqa: T201
+
+        # This message is going to be added to conditionally
+        msg = f"Causal effect of {exposure} -> {outcome}.\n"
+
+        do = [] if do is None else do  # making sure do is a list
+        # making a copy of the graph, removing edges into do-variables if required
+        # and removing edges pointing out of the exposure.
+        graph = _over(self.graph, do)
+        graph = _under(graph, [exposure])
+
+        # Backdoor are the remaining undirected paths from exposure to outcome
+        # converting lists into tuples because those are hashable
+        backdoor_paths = list(
+            nx.all_simple_paths(graph.to_undirected(), exposure, outcome)
+        )
+        if len(backdoor_paths) == 0:
+            msg += "No backdoor paths found, so no adjustment is necessary."
+            return print(msg)  # noqa: T201
+
+        # Finding colliders, as these close backdoor paths by default and should not
+        # be adjusted for
+        colliders = {
+            c for _, c, _ in nx.dag.colliders(graph) if c not in [exposure, outcome]
+        }
+
+        # Removing backdoor paths that contain a collider
+        if len(colliders) == 0:
+            # No need to iterate over lists (slow) if there are no colliders
+            open_paths = backdoor_paths
+        else:
+            open_paths = [
+                path
+                for path in backdoor_paths
+                for collider in colliders
+                if collider not in path
+            ]
+        if len(open_paths) == 0:
+            msg += "No open backdoor paths found, so no adjustment is necessary."
+            return print(msg)  # noqa: T201
+
+        print(f"{open_paths}")
+
+        # Adding open paths to the message, a bit involved due to tuples not joining
+        str_paths = [f"[{','.join(list(path))}]" for path in open_paths]
+        n = len(open_paths)
+        plur = "path" if n == 1 else "paths"  # being pedantic with plurailty
+        msg += f"Found {n} open {plur}:\n  {'\n  '.join(str_paths)}\n"
+
+        # Find minimal adjustment set -> minimal list of nodes that close all paths.
+        # Any of these nodes must be ancestors of the exposure, and must be observed
+        # and must NOT be colliders
+        available = set(nx.ancestors(graph, exposure)) - self.unobserved - colliders
+
+        # If there are no available nodes, then there is no adjustment set
+        if len(available) == 0:
+            msg += "No adjustment sets found."
+            return print(msg)  # noqa: T201
+
+        # Finding minimal adjustment sets
+        adjustment = _find_minimal_adjustment_set(list(available), open_paths)
+
+        if adjustment is None:
+            msg += "No adjustment sets found."
+            return print(msg)  # noqa: T201
+
+        str_adj = [f"[{','.join(list(set_))}]" for set_ in adjustment]
+        msg += f"Available adjustment sets:\n  {'\n  '.join(str_adj)}"
+        return print(msg)  # noqa: T201
+
+    # TODO implementeren!
+    def conditional_independencies(self) -> None:
+        # TODO opsplitsen in testable vs untestable (met unobserved variabelen)
+        pass
+
+    # TODO handmatig implementeren (of kiezen om niet te doen)
+    def chart(self, do: list[str] | None = None) -> alt.Chart:
+        """Generate an altair chart from the dag.
+
+        Args:
+            do (Optional): list of nodes to intervene on.
+
+        Returns:
+            altair Chart
+
+        """

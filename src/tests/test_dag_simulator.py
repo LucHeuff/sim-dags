@@ -1,17 +1,95 @@
 from dataclasses import dataclass
 
 import hypothesis.strategies as st
+import networkx as nx
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from sim_dags import Binomial, Categorical, DAGSimulator
-from sim_dags.dag_simulator import Distribution
+from sim_dags.dag_simulator import (
+    Distribution,
+    _find_minimal_adjustment_set,
+    _over,
+    _under,
+)
 from sim_dags.exceptions import (
     InvalidDoValueError,
     MissingDistributionError,
     UnknownDistributionError,
     UnknownDoVariableError,
 )
+
+# --- Tests for supportive functions
+
+
+@pytest.fixture
+def graph() -> nx.DiGraph:
+    """Basic network graph."""
+    nodes = ["a", "b", "c"]
+    edges = [("a", "b"), ("a", "c"), ("b", "c")]
+    graph = nx.DiGraph()
+    graph.add_nodes_from(nodes)
+    graph.add_edges_from(edges)
+
+    return graph
+
+
+def test_over(graph: nx.DiGraph) -> None:
+    """Test _over()."""
+    assert set(_over(graph, ["a"]).edges) == set(graph.edges), (
+        "over(a) edges incorrect"
+    )
+    assert set(_over(graph, ["b"]).edges) == {
+        ("a", "c"),
+        ("b", "c"),
+    }, "over(b) edges incorrect"
+    assert set(_over(graph, ["c"]).edges) == {("a", "b")}, "over(c) edges incorrect"
+    assert set(_over(graph, ["a", "b"]).edges) == {("a", "c"), ("b", "c")}, (
+        "over(a, b) edges incorrect"
+    )
+    assert set(_over(graph, ["a", "b", "c"]).edges) == set(), (
+        "over(a, b, c) edges incorrect"
+    )
+
+
+def test_(graph: nx.DiGraph) -> None:
+    """Test _under()."""
+    assert set(_under(graph, ["a"]).edges) == {("b", "c")}, (
+        "under(a) edges incorrect"
+    )
+    assert set(_under(graph, ["b"]).edges) == {
+        ("a", "b"),
+        ("a", "c"),
+    }, "under(b) edges incorrect"
+    assert set(_under(graph, ["c"]).edges) == set(graph.edges), (
+        "under(c) edges incorrect"
+    )
+    assert set(_under(graph, ["a", "b"]).edges) == set(), (
+        "under(a, b) edges incorrect"
+    )
+    assert set(_under(graph, ["a", "b", "c"]).edges) == set(), (
+        "under(a, b, c) edges incorrect"
+    )
+
+
+def test_find_minimal_adjustment_set() -> None:
+    """Test _find_minimal_adjustment_set()."""
+    assert _find_minimal_adjustment_set(["b"], [["a", "b", "c"]]) == [["b"]], (
+        "incorrect adjustment set."
+    )
+    assert _find_minimal_adjustment_set([], [["a", "b", "c"]]) is None, (
+        "incorrect adjustment set."
+    )
+    assert _find_minimal_adjustment_set(["d"], [["a", "b", "c"]]) is None, (
+        "incorrect adjustment set."
+    )
+    assert _find_minimal_adjustment_set(
+        ["b", "c", "d"],
+        [["a", "c", "e"], ["a", "b", "c", "d", "e"], ["a", "b", "d", "e"]],
+    ) == [["b", "c"], ["c", "d"]], "Incorrect adjustment set"
+
+
+# ---- Tests for DAGSimulator
 
 
 @pytest.fixture
@@ -42,6 +120,12 @@ def test_basic_dag_simulator(simulator: DAGSimulator) -> None:
     assert len(do_y_samples) == size, "do_y_samples has the wrong size"
     assert len(do_y_1_samples) == size, "do_y_1_samples has the wrong size"
 
+    # Testing separate functions that just print to console
+    simulator.backdoor_criterion("x", "y")
+    simulator.backdoor_criterion("x", "z")
+    simulator.backdoor_criterion("z", "y")
+    simulator.backdoor_criterion("x", "y", do=["z"])
+
 
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:
     """Test if DAGSimulator raises InvalidDoValueError."""
@@ -62,6 +146,7 @@ class FakeDistribution:
     name: str
     categories: int
     parents: list[str]
+    unobserved: bool = False
 
 
 def test_dag_simulator_raises_unknown_distribution() -> None:
