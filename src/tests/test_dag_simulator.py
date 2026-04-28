@@ -12,11 +12,17 @@ from sim_dags.dag_simulator import (
     _over,
     _under,
 )
+from sim_dags.example_generators import (
+    get_collider_simulator,
+    get_fork_simulator,
+    get_pipe_simulator,
+)
 from sim_dags.exceptions import (
     InvalidDoValueError,
     MissingDistributionError,
     UnknownDistributionError,
     UnknownDoVariableError,
+    VariableNotInDAGError,
 )
 
 # --- Tests for supportive functions
@@ -126,8 +132,48 @@ def test_basic_dag_simulator(simulator: DAGSimulator) -> None:
     simulator.backdoor_criterion("z", "y")
     simulator.backdoor_criterion("x", "y", do=["z"])
 
+    # This path doesn't exist, but should not raise an error
+    simulator.backdoor_criterion("y", "x")
+
     simulator.conditional_independencies()
     simulator.conditional_independencies(do=["x"])
+
+
+def test_backdoor_criterion() -> None:
+    """Test if all the options in backdoor_criterion work as intended."""
+    # M model -> collider that blocks only backdoor path
+    m_model = DAGSimulator(
+        [
+            Binomial("w"),
+            Binomial("v"),
+            Binomial("z", ["w", "v"]),
+            Binomial("x", ["w"]),
+            Binomial("y", ["v", "x"]),
+        ]
+    )
+    m_model.backdoor_criterion("x", "y")
+    # fork model with unobserved confound -> no adjustment set
+    f_model = DAGSimulator(
+        [
+            Binomial("z", unobserved=True),
+            Binomial("x", ["z"]),
+            Binomial("y", ["x", "z"]),
+        ]
+    )
+    f_model.backdoor_criterion("x", "y")
+
+
+def test_conditional_indepencencies() -> None:
+    """Test if all the options in conditional_independencies work as intended."""
+    pipe_model = DAGSimulator(
+        [Binomial("x"), Binomial("z", ["x"]), Binomial("y", ["z"])]
+    )
+    pipe_model.conditional_independencies()
+    pipe_unobs_model = DAGSimulator(
+        [Binomial("x"), Binomial("z", ["x"], unobserved=True), Binomial("y", ["z"])]
+    )
+    pipe_unobs_model.conditional_independencies()
+    pipe_unobs_model.conditional_independencies(do=["x"])
 
 
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:
@@ -142,6 +188,22 @@ def test_dag_simulator_raises_unknown_do_error(simulator: DAGSimulator) -> None:
         simulator.sample(10, do={"p": True})
 
 
+def test_backdoor_criterion_raises_missing_variable(simulator: DAGSimulator) -> None:
+    """Test if DAGSimulator.backdoor_criterion() raises VariableNotInDAGError."""
+    with pytest.raises(VariableNotInDAGError):
+        simulator.backdoor_criterion("t", "u")
+    with pytest.raises(VariableNotInDAGError):
+        simulator.backdoor_criterion("x", "y", do=["t"])
+
+
+def test_conditional_indepencencies_raises_missing_variable(
+    simulator: DAGSimulator,
+) -> None:
+    """Test if DAGSimulator.conditional_independencies() raises VariableNotInDAGError."""  # noqa: E501
+    with pytest.raises(VariableNotInDAGError):
+        simulator.conditional_independencies(do=["t", "u"])
+
+
 @dataclass
 class FakeDistribution:
     """Fake distribution."""
@@ -150,6 +212,7 @@ class FakeDistribution:
     categories: int
     parents: list[str]
     unobserved: bool = False
+    param_seed: int | None = None
 
 
 def test_dag_simulator_raises_unknown_distribution() -> None:
@@ -171,15 +234,19 @@ def test_dag_simulator_raises_missing_distribution() -> None:
 
 @st.composite
 def sample_distribution(
-    draw: st.DrawFn, name: str, ancestors: list[str]
+    draw: st.DrawFn, name: str, parents: list[str]
 ) -> Distribution:
     """Sample a random distribution."""
     binom = draw(st.booleans())
+    has_seed = draw(st.booleans())
+    unobserved = draw(st.booleans())
+
+    param_seed = draw(st.integers(min_value=0)) if has_seed else None
 
     if binom:
-        return Binomial(name, ancestors)
+        return Binomial(name, parents, unobserved=unobserved, param_seed=param_seed)
     categories = draw(st.integers(3, 50))
-    return Categorical(name, categories, ancestors)
+    return Categorical(name, categories, parents, unobserved, param_seed)
 
 
 def sample_dag(nodes: list[str], seed: int) -> dict[str, list[str]]:

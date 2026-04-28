@@ -10,15 +10,11 @@ from polars.testing import assert_frame_equal
 from scipy import stats
 from sim_dags.exceptions import (
     IllegalColumnNameError,
-    InvalidGridStepsError,
-    InvalidPriorDistributionError,
-    InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
 from sim_dags.probability import (
     ILLEGAL_NAMES,
     QueryParts,
-    _count,
     _get_name,
     _parse_query,
     _permutations,
@@ -232,63 +228,3 @@ def test_p_array(static_strategy: ProbabilityStrategy) -> None:
     assert_equal(get_p("z|x,w"), s.pz_xw)
     assert_equal(get_p("y|z,x,w"), s.py_zxw)
     assert_equal(get_p("y,x|z,w"), s.pyx_zw)
-
-
-@dataclass
-class GridApproxStrategy:
-    """Container for grid approximation strategy."""
-
-    k: int
-    n: int
-    steps: int
-    prior: np.ndarray | None
-    log_prior: np.ndarray | None
-    grid_error: bool
-    prior_error: bool
-    beta: np.ndarray
-    log_beta: np.ndarray
-
-
-@st.composite
-def get_grid_approx_strategy(draw: st.DrawFn) -> GridApproxStrategy:
-    """Strategy for testing grid_approx."""
-    grid_error = draw(st.booleans())
-    # grid_error makes step size invalid, and automatically makes prior size invalid.
-    # So easier to just always have prior_error when grid_error.
-    prior_error = True if grid_error else draw(st.booleans())
-    prior_none = False if prior_error else draw(st.booleans())
-
-    steps = (
-        draw(st.integers(max_value=0)) if grid_error else draw(st.integers(10, 100))
-    )
-    sample_steps = max(steps, 1)
-    n = draw(st.integers(1, 30))
-    k = draw(st.integers(0, max_value=n))
-    if prior_error:
-        prior = np.repeat(0, sample_steps + 10)
-        log_prior = prior
-    elif prior_none:
-        prior = None
-        log_prior = None
-    else:
-        prior = np.asarray(
-            draw(
-                st.lists(
-                    st.floats(1, 100), min_size=sample_steps, max_size=sample_steps
-                )
-            )
-        )
-        log_prior = np.asarray(
-            draw(
-                st.lists(
-                    st.floats(-100, 0), min_size=sample_steps, max_size=sample_steps
-                )
-            )
-        )
-    p = np.linspace(0, 1, sample_steps)
-    beta = stats.beta.pdf(p, 1 + k, 1 + n - k)
-    log_beta = stats.beta.logpdf(p, 1 + k, 1 + n - k)
-
-    return GridApproxStrategy(
-        k, n, steps, prior, log_prior, grid_error, prior_error, beta, log_beta
-    )

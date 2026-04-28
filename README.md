@@ -23,9 +23,11 @@ For example, to generate a `DAGSimulator` for the DAG $X \rightarrow Z \rightarr
 from sim_dags import Binomial, Categorical, DAGSimulator
 
 distributions = [
-    Categorical("X", 4),            # Categorical variable with 4 levels
-    Categorical("Z", 3, ["X"]),     # Categorical variable with 3 levels and X as ancestor
-    Binomial("Y", ["Z"]),           # Binomial variable with Z as ancestor
+    Categorical("X", 4),                    # Categorical variable with 4 levels
+    Categorical("Z", 3, ["X"]),             # Categorical variable with 3 levels and X as ancestor
+    Binomial("Y", ["Z"]),                   # Binomial variable with Z as ancestor
+    Catergorical("U", 4, param_seed=10)     # param_seed allows fixing the parameters, useful when you want different simulations to have the same distributions
+    Binomial("T", ["Y", "T"], unobserved=True) # unobserved child of Y and U
 ]
 dag_simulator = DAGSimulator(distributions)
 

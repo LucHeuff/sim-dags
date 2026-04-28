@@ -6,6 +6,10 @@ class VariableDoesNotExistError(SimDagError):
     """Raised when variable does not exist in probability calculation."""
 
 
+class VariableNotInDAGError(SimDagError):
+    """Raised when a variable does not appear in the DAG."""
+
+
 class InvalidPriorShapeError(SimDagError):
     """Raised when the provided prior has an incorrect shape."""
 

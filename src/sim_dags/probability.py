@@ -1,18 +1,12 @@
 from dataclasses import dataclass
 from itertools import product
 
-import numpy as np
 import polars as pl
 import xarray as xr
 from numpy.testing import assert_allclose, assert_almost_equal
-from scipy import stats
-from scipy.special import logsumexp
 
 from sim_dags.exceptions import (
     IllegalColumnNameError,
-    InvalidGridStepsError,
-    InvalidPriorDistributionError,
-    InvalidPriorShapeError,
     VariableDoesNotExistError,
 )
 

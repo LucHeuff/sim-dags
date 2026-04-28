@@ -49,17 +49,26 @@ def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart
 
     pipe_chart = plot_simulations(
         iterate_simulations(
-            get_simple_generator(pipe), n_sizes=n_sizes, n_seeds=n_seeds
+            get_simple_generator(pipe),
+            n_sizes=n_sizes,
+            n_seeds=n_seeds,
+            start_order=3,
         )
     ).properties(title="Comparison for Pipe DAG (correct: P(y|x))")
     fork_chart = plot_simulations(
         iterate_simulations(
-            get_simple_generator(fork), n_sizes=n_sizes, n_seeds=n_seeds
+            get_simple_generator(fork),
+            n_sizes=n_sizes,
+            n_seeds=n_seeds,
+            start_order=3,
         )
     ).properties(title="Comparison for Fork DAG (correct: ∑z P(y|x,z)P(z))")
     collider_chart = plot_simulations(
         iterate_simulations(
-            get_simple_generator(collider), n_sizes=n_sizes, n_seeds=n_seeds
+            get_simple_generator(collider),
+            n_sizes=n_sizes,
+            n_seeds=n_seeds,
+            start_order=3,
         )
     ).properties(title="Comparison for Collider DAG (correct: P(y|x))")
 

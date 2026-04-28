@@ -16,12 +16,73 @@ from sim_dags.exceptions import (
     MissingDistributionError,
     UnknownDistributionError,
     UnknownDoVariableError,
+    VariableNotInDAGError,
 )
+
+# ---- Supporting functions
 
 
 def _get_do_name(name: str) -> str:  # pragma: no cover
     """Translate name to do(name)."""
     return f"do({name})"
+
+
+def _over(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
+    """Remove edges pointing into variables from graph."""
+    g = graph.copy()
+    edges = [edge for edge in g.edges if edge[1] in variables]
+    g.remove_edges_from(edges)
+    return g
+
+
+def _under(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
+    """Remove edges coming out of variables from graph."""
+    g = graph.copy()
+    edges = [edge for edge in g.edges if edge[0] in variables]
+    g.remove_edges_from(edges)
+    return g
+
+
+def _find_minimal_adjustment_set(
+    available: list[str], open_paths: list[list[str]]
+) -> list[list[str]] | None:
+    """Find minimal adjustment set for these variables."""
+    # If there are no available nodes, then there is no adjustment set
+    if len(available) == 0:
+        return None
+
+    # Finding how often each node appears in the open paths
+    frequency = [
+        (node, sum(node in path for path in open_paths)) for node in available
+    ]
+    # if any single node appears as often as the number of open paths,
+    # combinations do not need to be searched.
+
+    if (max_ := max(n for _, n in frequency)) == len(open_paths):
+        return [[node] for node, n in frequency if n == max_]
+
+    # Nodes that do not appear in any path are irrelevant, ignoring these
+    relevant = [node for node, n in frequency if n > 0]
+
+    if len(relevant) == 0:  # returning when none of the nodes are relevant
+        return None
+
+    adjustment = []
+    min_size = len(relevant) + 1  # adding 1 to avoid early stopping
+
+    for size in range(2, len(relevant) + 1):  # not using min_size cause that changes
+        # if we already found smaller sets than this, these aren't minimal.
+        if size > min_size:
+            break
+        # check for combinations of this size whether they close all open paths
+        for c in combinations(relevant, size):
+            if all(any(node in path for node in c) for path in open_paths):
+                adjustment.append(list(c))
+                min_size = min(
+                    len(c), min_size
+                )  # update min size if this is smaller
+
+    return adjustment if len(adjustment) > 0 else None
 
 
 class Distribution(Protocol):
@@ -30,7 +91,8 @@ class Distribution(Protocol):
     name: str
     categories: int
     parents: list[str]
-    unobserved: bool = False
+    unobserved: bool
+    param_seed: int | None
 
 
 @dataclass(frozen=True)
@@ -41,6 +103,7 @@ class Categorical:
     categories: int = Field(ge=1)
     parents: list[str] = Field(default_factory=list)
     unobserved: bool = False
+    param_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +114,7 @@ class Binomial:
     parents: list[str] = Field(default_factory=list)
     categories: int = Field(default=2, init=False)
     unobserved: bool = False
+    param_seed: int | None = None
 
 
 class Generator(ABC):
@@ -130,7 +194,8 @@ class CategoricalGenerator(Generator):
         self.distribution = variable
 
         shape = [p.categories for p in parents] if len(parents) > 0 else ()
-        rng = np.random.default_rng(seed)
+        rng_seed = seed if variable.param_seed is None else variable.param_seed
+        rng = np.random.default_rng(rng_seed)
 
         # dirichlet distribution with number of categories of current variable
         # as last dimension
@@ -179,7 +244,8 @@ class BinomialGenerator(Generator):
         """Set parameters for this generator."""
         self.distribution = variable
         shape = [p.categories for p in parents] if len(parents) > 0 else ()
-        rng = np.random.default_rng(seed)
+        rng_seed = seed if variable.param_seed is None else variable.param_seed
+        rng = np.random.default_rng(rng_seed)
         self.parameters = rng.uniform(size=shape)
 
     def sample(self, inputs: np.ndarray, size: int, seed: int) -> np.ndarray:
@@ -201,64 +267,6 @@ class BinomialGenerator(Generator):
             rng = np.random.default_rng(seed)
             samples = rng.binomial(1, p=0.5, size=size)
         return self._check_samples(samples, size)
-
-
-def _over(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
-    """Remove edges pointing into variables from graph."""
-    g = graph.copy()
-    edges = [edge for edge in g.edges if edge[1] in variables]
-    g.remove_edges_from(edges)
-    return g
-
-
-def _under(graph: nx.DiGraph, variables: list[str]) -> nx.DiGraph:
-    """Remove edges coming out of variables from graph."""
-    g = graph.copy()
-    edges = [edge for edge in g.edges if edge[0] in variables]
-    g.remove_edges_from(edges)
-    return g
-
-
-def _find_minimal_adjustment_set(
-    available: list[str], open_paths: list[list[str]]
-) -> list[list[str]] | None:
-    """Find minimal adjustment set for these variables."""
-    # If there are no available nodes, then there is no adjustment set
-    if len(available) == 0:
-        return None
-
-    # Finding how often each node appears in the open paths
-    frequency = [
-        (node, sum(node in path for path in open_paths)) for node in available
-    ]
-    # if any single node appears as often as the number of open paths,
-    # combinations do not need to be searched.
-
-    if (max_ := max(n for _, n in frequency)) == len(open_paths):
-        return [[node] for node, n in frequency if n == max_]
-
-    # Nodes that do not appear in any path are irrelevant, ignoring these
-    relevant = [node for node, n in frequency if n > 0]
-
-    if len(relevant) == 0:  # returning when none of the nodes are relevant
-        return None
-
-    adjustment = []
-    min_size = len(relevant) + 1  # adding 1 to avoid early stopping
-
-    for size in range(2, len(relevant) + 1):  # not using min_size cause that changes
-        # if we already found smaller sets than this, these aren't minimal.
-        if size > min_size:
-            break
-        # check for combinations of this size whether they close all open paths
-        for c in combinations(relevant, size):
-            if all(any(node in path for node in c) for path in open_paths):
-                adjustment.append(list(c))
-                min_size = min(
-                    len(c), min_size
-                )  # update min size if this is smaller
-
-    return adjustment if len(adjustment) > 0 else None
 
 
 class DAGSimulator:
@@ -310,7 +318,7 @@ class DAGSimulator:
 
         # setting up the generators -> requires knowing distributions of ancestors
 
-        def get_generator(node: str) -> Generator:
+        def get_generator(node: str, seed: int) -> Generator:
             """Fetch generator for a specific node."""
             variable = self.distributions[node]
             parents = [self.distributions[p] for p in self.graph.predecessors(node)]
@@ -323,7 +331,14 @@ class DAGSimulator:
                     msg = f"No known generator for {variable.__class__.__name__}"
                     raise UnknownDistributionError(msg)
 
-        self.generators = {node: get_generator(node) for node in self.graph.nodes}
+        # iterating over seeds, since each generator resets the random generator,
+        # which would mean that two variables with the same number of categories
+        # would result in the same parameters, which is unlikely.
+        # This behaviour is overridden by setting a param_seed in the Distribution.
+        self.generators = {
+            node: get_generator(node, seed)
+            for seed, node in enumerate(self.graph.nodes, start=seed)
+        }
 
         assert len(self.distributions) == len(self.generators), (
             "Unequal number of generators and distributions"
@@ -338,6 +353,12 @@ class DAGSimulator:
             },
             strict=True,
         )
+
+    def _check_nodes(self, nodes: list[str]) -> None:
+        missing = set(nodes) - set(self.graph.nodes)
+        if len(missing) > 0:
+            msg = f"{missing} do not appear in the DAG."
+            raise VariableNotInDAGError(msg)
 
     def sample(
         self,
@@ -411,6 +432,7 @@ class DAGSimulator:
             Nothing, but prints adjustment sets to the terminal.
 
         """
+        self._check_nodes([exposure, outcome])
         # should make sure the desired causal path exists in the first place
         if not nx.has_path(self.graph, exposure, outcome):
             msg = f"The path {exposure} -> {outcome} does not appear in the DAG."
@@ -419,7 +441,11 @@ class DAGSimulator:
         # This message is going to be added to conditionally
         msg = f"Causal effect of {exposure} -> {outcome}.\n"
 
-        do = [] if do is None else do  # making sure do is a list
+        if do is not None:
+            self._check_nodes(do)
+        else:
+            do = []  # making sure do is a list
+
         # making a copy of the graph, removing edges into do-variables if required
         # and removing edges pointing out of the exposure.
         graph = _over(self.graph, do)
@@ -474,7 +500,8 @@ class DAGSimulator:
         # Finding minimal adjustment sets
         adjustment = _find_minimal_adjustment_set(list(available), open_paths)
 
-        if adjustment is None:
+        # Not sure this can happen, but coding it in regardless
+        if adjustment is None:  # pragma: no cover
             msg += "No adjustment sets found."
             return print(msg)  # noqa: T201
 
@@ -491,16 +518,21 @@ class DAGSimulator:
         Returns:
             Nothing, but prints conditional independencies to the console.
         """
-        # Applying
-        do = [] if do is None else do
+        if do is not None:
+            # Sanity check for do variables
+            self._check_nodes(do)
+        else:
+            do = []  # making sure do is a list
+
         graph = _over(self.graph, do)
         testable = {}
         untestable = {}
+
         for c in combinations(graph.nodes, 2):
             left, right = c
             indep = nx.find_minimal_d_separator(graph, left, right)
             if indep is not None:
-                if left in self.unobserved or right in self.unobserved:
+                if any(v in self.unobserved for v in [left, right, *indep]):
                     untestable[f"{left} ⫫ {right}"] = list(indep)
                 else:
                     testable[f"{left} ⫫ {right}"] = list(indep)
