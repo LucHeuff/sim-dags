@@ -4,18 +4,15 @@ import hypothesis.strategies as st
 import networkx as nx
 import numpy as np
 import pytest
+from altair import param
 from hypothesis import given, settings
+from numpy.testing import assert_equal, assert_raises
 from sim_dags import Binomial, Categorical, DAGSimulator
 from sim_dags.dag_simulator import (
     Distribution,
     _find_minimal_adjustment_set,
     _over,
     _under,
-)
-from sim_dags.example_generators import (
-    get_collider_simulator,
-    get_fork_simulator,
-    get_pipe_simulator,
 )
 from sim_dags.exceptions import (
     InvalidDoValueError,
@@ -202,6 +199,25 @@ def test_conditional_indepencencies_raises_missing_variable(
     """Test if DAGSimulator.conditional_independencies() raises VariableNotInDAGError."""  # noqa: E501
     with pytest.raises(VariableNotInDAGError):
         simulator.conditional_independencies(do=["t", "u"])
+
+
+def test_fix_seeds(simulator: DAGSimulator) -> None:
+    """Test if fixing seeds works as intended."""
+    dag1 = DAGSimulator(
+        [Binomial("x"), Categorical("y", 4, param_seed=10)], seed=12345
+    )
+    dag2 = DAGSimulator(
+        [Binomial("x"), Categorical("y", 4, param_seed=10)], seed=54321
+    )
+
+    x1 = dag1.generators["x"].parameters
+    x2 = dag2.generators["x"].parameters
+    y1 = dag1.generators["y"].parameters
+    y2 = dag2.generators["y"].parameters
+
+    assert_equal(y1, y2, err_msg="Parameters are different, but should be the same")
+    with assert_raises(AssertionError):
+        assert_equal(x1, x2, err_msg="Parameters should not be equal")
 
 
 @dataclass
