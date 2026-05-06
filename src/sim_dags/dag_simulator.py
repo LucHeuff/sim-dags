@@ -528,6 +528,16 @@ class DAGSimulator:
         Returns:
             Nothing, but prints conditional independencies to the console.
         """
+
+        def parse_var(var: str) -> str:
+            return f"({var})" if var in self.unobserved else var
+
+        def parse_vars(variables: list[str]) -> list[str]:
+            return [parse_var(var) for var in variables]
+
+        def parse_conditional(left: str, right: str) -> str:
+            return f"{parse_var(left)} ⫫ {parse_var(right)}"
+
         if do is not None:
             # Sanity check for do variables
             self._check_nodes(do)
@@ -542,10 +552,12 @@ class DAGSimulator:
             left, right = c
             indep = nx.find_minimal_d_separator(graph, left, right)
             if indep is not None:
+                key = parse_conditional(left, right)
+                value = parse_vars(indep)
                 if any(v in self.unobserved for v in [left, right, *indep]):
-                    untestable[f"{left} ⫫ {right}"] = list(indep)
+                    untestable[key] = value
                 else:
-                    testable[f"{left} ⫫ {right}"] = list(indep)
+                    testable[key] = value
 
         if len(testable) == 0 and len(untestable) == 0:
             msg = "The model does not imply any conditional independencies."
