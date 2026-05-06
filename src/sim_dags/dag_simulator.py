@@ -418,6 +418,17 @@ class DAGSimulator:
         """Return list of unobserved nodes."""
         return {d.name for d in self.distributions.values() if d.unobserved}
 
+    def _get_backdoor_paths(
+        self, graph: nx.DiGraph, exposure: str, outcome: str
+    ) -> set[tuple]:
+        """Returns all backdoor paths for exposure -> outcome."""
+        return {
+            tuple(path)
+            for path in nx.all_shortest_paths(
+                graph.to_undirected(), exposure, outcome
+            )
+        }
+
     def backdoor_criterion(
         self, exposure: str, outcome: str, do: list[str] | None = None
     ) -> None:
@@ -454,7 +465,7 @@ class DAGSimulator:
         # Backdoor are the remaining undirected paths from exposure to outcome
         # converting lists into tuples because those are hashable
         backdoor_paths = list(
-            nx.all_simple_paths(graph.to_undirected(), exposure, outcome)
+            nx.all_shortest_paths(graph.to_undirected(), exposure, outcome)
         )
         if len(backdoor_paths) == 0:
             msg += "No backdoor paths found, so no adjustment is necessary."
@@ -474,8 +485,7 @@ class DAGSimulator:
             open_paths = [
                 path
                 for path in backdoor_paths
-                for collider in colliders
-                if collider not in path
+                if any(collider in path for collider in colliders)
             ]
         if len(open_paths) == 0:
             msg += "No open backdoor paths found, so no adjustment is necessary."
