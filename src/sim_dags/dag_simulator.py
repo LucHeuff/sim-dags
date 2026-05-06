@@ -505,7 +505,7 @@ class DAGSimulator:
             msg += "No adjustment sets found."
             return print(msg)  # noqa: T201
 
-        str_adj = [f"[{','.join(list(set_))}]" for set_ in adjustment]
+        str_adj = [f"{{{','.join(list(set_))}}}" for set_ in adjustment]
         msg += f"Available adjustment sets:\n  {'\n  '.join(str_adj)}"
         return print(msg)  # noqa: T201
 
