@@ -99,9 +99,12 @@ def test_find_minimal_adjustment_set() -> None:
 def simulator() -> DAGSimulator:
     """Basic DAG simulator."""
     dists = [
-        Categorical("x", 4),
-        Categorical("z", 3, ["x"]),
+        Binomial("u1"),
+        Binomial("u2", unobserved=True),
+        Categorical("x", 4, ["u1"]),
+        Categorical("z", 3, ["x", "u2"]),
         Binomial("y", ["x", "z"]),
+        Binomial("w", ["y", "z"]),
     ]
 
     return DAGSimulator(dists)
@@ -128,12 +131,14 @@ def test_basic_dag_simulator(simulator: DAGSimulator) -> None:
     simulator.backdoor_criterion("x", "z")
     simulator.backdoor_criterion("z", "y")
     simulator.backdoor_criterion("x", "y", do=["z"])
+    simulator.backdoor_criterion("x", "y", do=["y"])
 
     # This path doesn't exist, but should not raise an error
     simulator.backdoor_criterion("y", "x")
 
     simulator.conditional_independencies()
     simulator.conditional_independencies(do=["x"])
+    simulator.conditional_independencies(ignore=["u1", "u2"])
 
 
 def test_backdoor_criterion() -> None:
@@ -171,6 +176,10 @@ def test_conditional_indepencencies() -> None:
     )
     pipe_unobs_model.conditional_independencies()
     pipe_unobs_model.conditional_independencies(do=["x"])
+    complete_model = DAGSimulator(
+        [Binomial("x"), Binomial("z", ["x"]), Binomial("y", ["z", "x"])]
+    )
+    complete_model.conditional_independencies()
 
 
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:

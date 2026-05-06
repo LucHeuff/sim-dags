@@ -418,17 +418,6 @@ class DAGSimulator:
         """Return list of unobserved nodes."""
         return {d.name for d in self.distributions.values() if d.unobserved}
 
-    def _get_backdoor_paths(
-        self, graph: nx.DiGraph, exposure: str, outcome: str
-    ) -> set[tuple]:
-        """Returns all backdoor paths for exposure -> outcome."""
-        return {
-            tuple(path)
-            for path in nx.all_shortest_paths(
-                graph.to_undirected(), exposure, outcome
-            )
-        }
-
     def backdoor_criterion(
         self, exposure: str, outcome: str, do: list[str] | None = None
     ) -> None:
@@ -490,8 +479,9 @@ class DAGSimulator:
             open_paths = [
                 path
                 for path in backdoor_paths
-                if any(collider in path for collider in colliders)
+                if not any(collider in path for collider in colliders)
             ]
+
         if len(open_paths) == 0:
             msg += "No open backdoor paths found, so no adjustment is necessary."
             return print(msg)  # noqa: T201
@@ -524,11 +514,14 @@ class DAGSimulator:
         msg += f"Available adjustment sets:\n  {'\n  '.join(str_adj)}"
         return print(msg)  # noqa: T201
 
-    def conditional_independencies(self, do: list[str] | None = None) -> None:
+    def conditional_independencies(
+        self, do: list[str] | None = None, ignore: list[str] | None = None
+    ) -> None:
         """Display implied conditional independencies for this DAG.
 
         Args:
             do (Optional): variables that are being intervened on.
+            ignore (Optional): variables to omit from result.
 
         Returns:
             Nothing, but prints conditional independencies to the console.
@@ -549,6 +542,11 @@ class DAGSimulator:
         else:
             do = []  # making sure do is a list
 
+        if ignore is not None:
+            self._check_nodes(ignore)
+        else:
+            ignore = []
+
         graph = _over(self.graph, do)
         testable = {}
         untestable = {}
@@ -557,6 +555,10 @@ class DAGSimulator:
             left, right = c
             indep = nx.find_minimal_d_separator(graph, left, right)
             if indep is not None:
+                # Skipping if any of the variables is in the ignore list
+                if any(v in ignore for v in [left, right, *indep]):
+                    continue
+
                 key = parse_conditional(left, right)
                 value = parse_vars(indep)
                 if any(v in self.unobserved for v in [left, right, *indep]):
