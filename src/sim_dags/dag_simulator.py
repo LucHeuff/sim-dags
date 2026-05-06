@@ -464,9 +464,14 @@ class DAGSimulator:
 
         # Backdoor are the remaining undirected paths from exposure to outcome
         # converting lists into tuples because those are hashable
-        backdoor_paths = list(
-            nx.all_shortest_paths(graph.to_undirected(), exposure, outcome)
-        )
+        # NetworkX doesn't handle non-existing paths nicely, so I need a try-except
+        try:
+            backdoor_paths = list(
+                nx.all_shortest_paths(graph.to_undirected(), exposure, outcome)
+            )
+        except nx.exception.NetworkXNoPath:
+            backdoor_paths = []
+
         if len(backdoor_paths) == 0:
             msg += "No backdoor paths found, so no adjustment is necessary."
             return print(msg)  # noqa: T201
