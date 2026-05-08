@@ -196,7 +196,9 @@ class Generator(ABC):
             raise InvalidDoValueError(msg)
 
     @abstractmethod
-    def sample(self, inputs: np.ndarray, size: int, seed: int) -> np.ndarray:
+    def sample(
+        self, inputs: np.ndarray, size: int, rng: np.random.Generator
+    ) -> np.ndarray:
         """Generate samples without intervention."""
         ...
 
@@ -205,7 +207,7 @@ class Generator(ABC):
         self,
         value: bool | int,  # noqa: FBT001
         size: int,
-        seed: int,
+        rng: np.random.Generator,
     ) -> np.ndarray:
         """Generate smaples under intervention."""
         ...
@@ -220,15 +222,16 @@ class CategoricalGenerator(Generator):
         self,
         variable: Categorical,
         parents: list[Distribution],
-        seed: int,
         alpha: int,
+        rng: np.random.Generator,
     ) -> None:
         """Set parameters for this generator."""
         self.distribution = variable
 
         shape = [p.categories for p in parents] if len(parents) > 0 else ()
-        rng_seed = seed if variable.param_seed is None else variable.param_seed
-        rng = np.random.default_rng(rng_seed)
+        # resetting the random generator if this Categorical has a fixed seed
+        if variable.param_seed is not None:
+            rng = np.random.default_rng(variable.param_seed)
 
         # dirichlet distribution with number of categories of current variable
         # as last dimension
@@ -236,10 +239,11 @@ class CategoricalGenerator(Generator):
         self.parameters = rng.dirichlet(np.repeat(alpha, categories), size=shape)
         self.do_parameters = np.repeat(1 / categories, categories)
 
-    def sample(self, inputs: np.ndarray, size: int, seed: int) -> np.ndarray:
+    def sample(
+        self, inputs: np.ndarray, size: int, rng: np.random.Generator
+    ) -> np.ndarray:
         """Generate categorical samples without intervention."""
         self._check_inputs(inputs)
-        rng = np.random.default_rng(seed)
         p = self.parameters[*inputs] if self.parents != 0 else self.parameters
         s = None if self.parents != 0 else size
         samples = rng.multinomial(1, pvals=p, size=s).argmax(axis=1)
@@ -249,14 +253,13 @@ class CategoricalGenerator(Generator):
         self,
         value: bool | int,  # noqa: FBT001
         size: int,
-        seed: int,
+        rng: np.random.Generator,
     ) -> np.ndarray:
         """Generate categorical samples under intervention."""
         if not isinstance(value, bool):
             self._check_values(value)
             samples = np.repeat(value, size)
         else:
-            rng = np.random.default_rng(seed)
             samples = rng.choice(
                 self.distribution.categories, p=self.do_parameters, size=size
             )
@@ -272,32 +275,34 @@ class BinomialGenerator(Generator):
         self,
         variable: Binomial,
         parents: list[Distribution],
-        seed: int,
+        rng: np.random.Generator,
     ) -> None:
         """Set parameters for this generator."""
         self.distribution = variable
         shape = [p.categories for p in parents] if len(parents) > 0 else ()
-        rng_seed = seed if variable.param_seed is None else variable.param_seed
-        rng = np.random.default_rng(rng_seed)
+
+        # resetting the random generator if this Binomial has a fixed seed
+        if variable.param_seed is not None:
+            rng = np.random.default_rng(variable.param_seed)
         self.parameters = rng.uniform(size=shape)
 
-    def sample(self, inputs: np.ndarray, size: int, seed: int) -> np.ndarray:
+    def sample(
+        self, inputs: np.ndarray, size: int, rng: np.random.Generator
+    ) -> np.ndarray:
         """Generate binomial samples without intervention."""
         self._check_inputs(inputs)
-        rng = np.random.default_rng(seed)
         p = self.parameters[*inputs] if self.parents != 0 else self.parameters
         s = None if self.parents != 0 else size
 
         samples = rng.binomial(1, p=p, size=s)
         return self._check_samples(samples, size)
 
-    def do(self, value: int, size: int, seed: int) -> np.ndarray:
+    def do(self, value: int, size: int, rng: np.random.Generator) -> np.ndarray:
         """Generate binomial samples under intervention."""
         if not isinstance(value, bool):
             self._check_values(value)
             samples = np.repeat(value, size)
         else:
-            rng = np.random.default_rng(seed)
             samples = rng.binomial(1, p=0.5, size=size)
         return self._check_samples(samples, size)
 
@@ -367,28 +372,22 @@ class DAGSimulator:
             raise MissingDistributionError(msg)
 
         # setting up the generators -> requires knowing distributions of ancestors
+        rng = np.random.default_rng(seed)
 
-        def get_generator(node: str, seed: int) -> Generator:
+        def get_generator(node: str) -> Generator:
             """Fetch generator for a specific node."""
             variable = self.distributions[node]
             parents = [self.distributions[p] for p in self.graph.predecessors(node)]
             match variable:
                 case Binomial():
-                    return BinomialGenerator(variable, parents, seed)
+                    return BinomialGenerator(variable, parents, rng)
                 case Categorical():
-                    return CategoricalGenerator(variable, parents, seed, alpha)
+                    return CategoricalGenerator(variable, parents, alpha, rng)
                 case _:
                     msg = f"No known generator for {variable.__class__.__name__}"
                     raise UnknownDistributionError(msg)
 
-        # iterating over seeds, since each generator resets the random generator,
-        # which would mean that two variables with the same number of categories
-        # would result in the same parameters, which is unlikely.
-        # This behaviour is overridden by setting a param_seed in the Distribution.
-        self.generators = {
-            node: get_generator(node, seed)
-            for seed, node in enumerate(self.graph.nodes, start=seed)
-        }
+        self.generators = {node: get_generator(node) for node in self.graph.nodes}
 
         assert len(self.distributions) == len(self.generators), (
             "Unequal number of generators and distributions"
@@ -544,15 +543,17 @@ class DAGSimulator:
         results: dict[str, np.ndarray] = {}
         rename: dict[str, str] = {}
 
+        rng = np.random.default_rng(seed)
+
         for node in self.topological_sort:
             generator = self.generators[node]
             if node in do:
-                results[node] = generator.do(do[node], size, seed)
+                results[node] = generator.do(do[node], size, rng)
                 rename[node] = generator.do_name
             else:
                 parents = list(self.graph.predecessors(node))
                 inputs = np.asarray([results[anc] for anc in parents])
-                results[node] = generator.sample(inputs, size, seed)
+                results[node] = generator.sample(inputs, size, rng)
 
         # applying rename only if desired.
         rename = rename if rename_do else {}
@@ -633,6 +634,9 @@ class DAGSimulator:
         Returns:
             Nothing, but prints conditional independencies to the console.
         """
+        # NOTE determining the testable and untestable conditional independencies
+        # happens in a separate function. This one just does preprocessing and
+        # converts the results into readable text on the terminal
         if do is not None:
             # Sanity check for do variables
             self._check_nodes(do)
