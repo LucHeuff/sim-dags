@@ -1,5 +1,6 @@
 import altair as alt
 import polars as pl
+from numpy.f2py.crackfortran import n
 
 from sim_dags.dag_simulator import DAGSimulator
 from sim_dags.example_generators import (
@@ -28,7 +29,7 @@ def get_simple_generator(dag_simulator: DAGSimulator) -> CompareFunction:
         lambda size, seed: dag_simulator.sample(
             size, seed, do={"x": True}, rename_do=False
         ),
-        lambda samples: p(samples, "y|x"),
+        lambda samples: p(samples, "y|x", name="do"),
         dag_simulator.sample,
         [
             lambda samples: p(samples, "y|x"),
@@ -41,7 +42,7 @@ def get_simple_generator(dag_simulator: DAGSimulator) -> CompareFunction:
     )
 
 
-def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart:
+def compare_simple_dags(n_sizes: int = 4, n_seeds: int = 10) -> alt.VConcatChart:
     """Generate comparison for simple DAGs."""
     pipe = get_pipe_simulator()
     fork = get_fork_simulator()
@@ -80,7 +81,7 @@ def compare_simple_dags(n_sizes: int = 5, n_seeds: int = 10) -> alt.VConcatChart
 # --- Comparing DAG 1, writing the SimulateFunction manually.
 
 
-def compare_dag1(n_sizes: int = 5, n_seeds: int = 10) -> Chart:
+def compare_dag1(n_sizes: int = 4, n_seeds: int = 10) -> Chart:
     """Generate comparison for DAG1.
 
     This is an example of writing the SimulateFunction manually.

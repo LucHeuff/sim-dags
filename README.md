@@ -85,7 +85,7 @@ compare = build_compare_function(
         intervention_sim=lambda size, seed: dag_simulator.sample(
             size, seed, do={"x": True}, rename_do=False # not renaming makes sure the results can be easily combined with estimands
         ),
-        intervention=lambda samples: p(samples, "y|x"), # represents P(y|do(x))
+        intervention=lambda samples: p(samples, "y|x", name="do"), # represents P(y|do(x)), make sure to rename if testing the same distribution elsewhere!
         observation_sim=dag_simulator.sample,
         estimands = [
             lambda samples: p(samples, "y|x"), # including P(y|x) to show that this estimand is incorrect
