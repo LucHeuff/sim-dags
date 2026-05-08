@@ -1,14 +1,10 @@
 from dataclasses import dataclass
 
-import hypothesis.strategies as st
 import networkx as nx
-import numpy as np
 import pytest
-from hypothesis import given, settings
 from numpy.testing import assert_equal, assert_raises
 from sim_dags import Binomial, Categorical, DAGSimulator
 from sim_dags.dag_simulator import (
-    Distribution,
     _find_minimal_adjustment_set,
     _find_minimal_d_separators,
     _over,
@@ -373,8 +369,8 @@ def test_conditional_indepencencies_raises_missing_variable(
     simulator: DAGSimulator,
 ) -> None:
     """Test if DAGSimulator.conditional_independencies() raises VariableNotInDAGError."""  # noqa: E501
-    # with pytest.raises(VariableNotInDAGError):
-    #     simulator.conditional_independencies(do=["t", "u"])
+    with pytest.raises(VariableNotInDAGError):
+        simulator.conditional_independencies(do=["t", "u"])
 
 
 def test_fix_seeds() -> None:

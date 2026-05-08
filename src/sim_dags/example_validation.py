@@ -1,6 +1,5 @@
 import altair as alt
 import polars as pl
-from numpy.f2py.crackfortran import n
 
 from sim_dags.dag_simulator import DAGSimulator
 from sim_dags.example_generators import (
