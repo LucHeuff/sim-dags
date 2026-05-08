@@ -8,6 +8,7 @@ import networkx as nx
 import numpy as np
 import pandera.polars as pa
 import polars as pl
+from more_itertools import sliding_window
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
@@ -78,11 +79,43 @@ def _find_minimal_adjustment_set(
         for c in combinations(relevant, size):
             if all(any(node in path for node in c) for path in open_paths):
                 adjustment.append(list(c))
-                min_size = min(
-                    len(c), min_size
-                )  # update min size if this is smaller
+                # update min size if this is smaller
+                min_size = min(len(c), min_size)
 
     return adjustment if len(adjustment) > 0 else None
+
+
+def _find_minimal_d_separators(
+    graph: nx.DiGraph, left: str, right: str
+) -> list[list[str]] | None:
+    """Find minimal d-separating sets between two nodes in the graph."""
+    # Start by letting networkx find a minimal d-separator
+    found = nx.find_minimal_d_separator(graph, left, right)
+    # This only finds one, but at least we know the length of that set
+    if found is None:  # unless none was found
+        return None
+
+    size = len(found)
+    # Only consider ancestors of left and right
+    available = {
+        node
+        for node in set(nx.ancestors(graph, left)) | set(nx.ancestors(graph, right))
+        if node not in [left, right]
+    }
+
+    # Sorting to get consisten outputs for testing
+    d_sep = [sorted(found)]
+    for c in combinations(available, size):
+        # Skip the result we already found
+        if set(c) == found:
+            continue
+        if nx.is_minimal_d_separator(graph, left, right, set(c)):
+            d_sep.append(sorted(c))
+
+    assert all(
+        nx.is_minimal_d_separator(graph, left, right, set(sep)) for sep in d_sep
+    ), f"Some d-separating sets found are not minimal for {left} ⫫ {right}."
+    return d_sep
 
 
 class Distribution(Protocol):
@@ -269,6 +302,23 @@ class BinomialGenerator(Generator):
         return self._check_samples(samples, size)
 
 
+@dataclass(slots=True, frozen=True)
+class BackdoorCriterion:
+    """Container for partial outputs of backdoor criterion."""
+
+    backdoor_paths: list[list[str]]
+    open_paths: list[list[str]]
+    adjustment_sets: list[list[str]]
+
+
+@dataclass(slots=True, frozen=True)
+class ConditionalIndependecies:
+    """Container for partial outputs of conditional independencies."""
+
+    testable: dict[str, list[list[str]]]
+    untestable: dict[str, list[list[str]]]
+
+
 class DAGSimulator:
     """Simulate samples from a DAG.
 
@@ -360,6 +410,102 @@ class DAGSimulator:
             msg = f"{missing} do not appear in the DAG."
             raise VariableNotInDAGError(msg)
 
+    def _path_has_collider(self, path: list[str]) -> bool:
+        """Check if the current path contains a collider."""
+        if len(path) < 3:  # noqa: PLR2004
+            return False
+        for u, c, v in sliding_window(path, 3):
+            if self.graph.has_edge(u, c) and self.graph.has_edge(v, c):
+                return True
+        return False
+
+    def _backdoor(
+        self, exposure: str, outcome: str, do: list[str]
+    ) -> BackdoorCriterion:
+        """Calculate elements through backdoor criterion."""
+        # Copying graph and applying do operations, as well as removing
+        # arrows coming out of exposure.
+        graph = _over(self.graph, do)
+        graph = _under(graph, [exposure])
+
+        # Backdoor paths are the remaining undirected paths from exposure to outcome.
+        # NetworkX doesn't handle non-existing paths gracefully so need try-except.
+        try:
+            backdoor_paths = list(
+                nx.all_shortest_paths(graph.to_undirected(), exposure, outcome)
+            )
+        except nx.exception.NetworkXNoPath:
+            backdoor_paths = []
+
+        # No backdoor paths, don't need to perform any further processing
+        if len(backdoor_paths) == 0:
+            return BackdoorCriterion(backdoor_paths, [], [])
+
+        # Backdoor paths with colliders on them are closed by default, rest is open
+        open_paths = [
+            path for path in backdoor_paths if not self._path_has_collider(path)
+        ]
+
+        # If there are no open paths, don't need to perform any further processing
+        if len(open_paths) == 0:
+            return BackdoorCriterion(backdoor_paths, open_paths, [])
+
+        # Finding minimal adjustment set -> only need to look at available nodes.
+        # These are observed ancestors of exposure that are not colliders
+        available = set(nx.ancestors(graph, exposure)) - self.unobserved
+
+        # If there are no available nodes, don't need to perform further processing
+        if len(available) == 0:
+            return BackdoorCriterion(backdoor_paths, open_paths, [])
+
+        adjustment = _find_minimal_adjustment_set(list(available), open_paths)
+
+        if adjustment is None:
+            return BackdoorCriterion(backdoor_paths, open_paths, [])
+        return BackdoorCriterion(backdoor_paths, open_paths, adjustment)
+
+    def _conditional(
+        self, do: list[str], ignore: list[str]
+    ) -> ConditionalIndependecies:
+        """Calculate conditional independencies."""
+
+        def process(var: str) -> str:
+            return f"({var})" if var in self.unobserved else var
+
+        def process_conditional(left: str, right: str) -> str:
+            return f"{process(left)} ⫫ {process(right)}"
+
+        graph = _over(self.graph, do)
+
+        testable = {}
+        untestable = {}
+
+        for left, right in combinations(graph.nodes, 2):
+            indep = _find_minimal_d_separators(graph, left, right)
+            if indep is not None:
+                # Skipping variables on the ignore list
+                key = process_conditional(left, right)
+                testable_values = []
+                untestable_values = []
+
+                for d_sep in indep:
+                    all_ = [left, right, *d_sep]
+                    # Skipping if values are on the ignore list
+                    if any(v in ignore for v in all_):
+                        continue
+                    value = list(map(process, sorted(d_sep)))
+                    if any(v in self.unobserved for v in all_):
+                        untestable_values.append(value)
+                    else:
+                        testable_values.append(value)
+
+                if len(untestable_values) > 0:
+                    untestable[key] = untestable_values
+                if len(testable_values) > 0:
+                    testable[key] = testable_values
+
+        return ConditionalIndependecies(testable, untestable)
+
     def sample(
         self,
         size: int,
@@ -432,6 +578,9 @@ class DAGSimulator:
             Nothing, but prints adjustment sets to the terminal.
 
         """
+        # NOTE: determining the adjustment sets happens in a separate function
+        # This one simply parses inputs and generates the output string.
+
         self._check_nodes([exposure, outcome])
         # should make sure the desired causal path exists in the first place
         if not nx.has_path(self.graph, exposure, outcome):
@@ -446,71 +595,29 @@ class DAGSimulator:
         else:
             do = []  # making sure do is a list
 
-        # making a copy of the graph, removing edges into do-variables if required
-        # and removing edges pointing out of the exposure.
-        graph = _over(self.graph, do)
-        graph = _under(graph, [exposure])
+        backdoor = self._backdoor(exposure, outcome, do)
 
-        # Backdoor are the remaining undirected paths from exposure to outcome
-        # converting lists into tuples because those are hashable
-        # NetworkX doesn't handle non-existing paths nicely, so I need a try-except
-        try:
-            backdoor_paths = list(
-                nx.all_shortest_paths(graph.to_undirected(), exposure, outcome)
-            )
-        except nx.exception.NetworkXNoPath:
-            backdoor_paths = []
-
-        if len(backdoor_paths) == 0:
+        if len(backdoor.backdoor_paths) == 0:
             msg += "No backdoor paths found, so no adjustment is necessary."
             return print(msg)  # noqa: T201
 
-        # Finding colliders, as these close backdoor paths by default and should not
-        # be adjusted for
-        colliders = {
-            c for _, c, _ in nx.dag.colliders(graph) if c not in [exposure, outcome]
-        }
-
-        # Removing backdoor paths that contain a collider
-        if len(colliders) == 0:
-            # No need to iterate over lists (slow) if there are no colliders
-            open_paths = backdoor_paths
-        else:
-            open_paths = [
-                path
-                for path in backdoor_paths
-                if not any(collider in path for collider in colliders)
-            ]
-
-        if len(open_paths) == 0:
+        if len(backdoor.open_paths) == 0:
             msg += "No open backdoor paths found, so no adjustment is necessary."
             return print(msg)  # noqa: T201
-
         # Adding open paths to the message, a bit involved due to tuples not joining
-        str_paths = [f"[{','.join(list(path))}]" for path in open_paths]
-        n = len(open_paths)
+        str_paths = [f"[{','.join(list(path))}]" for path in backdoor.open_paths]
+        n = len(backdoor.open_paths)
         plur = "path" if n == 1 else "paths"  # being pedantic with plurailty
         msg += f"Found {n} open {plur}:\n  {'\n  '.join(str_paths)}\n"
 
-        # Find minimal adjustment set -> minimal list of nodes that close all paths.
-        # Any of these nodes must be ancestors of the exposure, and must be observed
-        # and must NOT be colliders
-        available = set(nx.ancestors(graph, exposure)) - self.unobserved - colliders
-
         # If there are no available nodes, then there is no adjustment set
-        if len(available) == 0:
+        if len(backdoor.adjustment_sets) == 0:
             msg += "No adjustment sets found."
             return print(msg)  # noqa: T201
 
-        # Finding minimal adjustment sets
-        adjustment = _find_minimal_adjustment_set(list(available), open_paths)
-
-        # Not sure this can happen, but coding it in regardless
-        if adjustment is None:  # pragma: no cover
-            msg += "No adjustment sets found."
-            return print(msg)  # noqa: T201
-
-        str_adj = [f"{{{','.join(list(set_))}}}" for set_ in adjustment]
+        str_adj = [
+            f"{{{','.join(list(set_))}}}" for set_ in backdoor.adjustment_sets
+        ]
         msg += f"Available adjustment sets:\n  {'\n  '.join(str_adj)}"
         return print(msg)  # noqa: T201
 
@@ -526,16 +633,6 @@ class DAGSimulator:
         Returns:
             Nothing, but prints conditional independencies to the console.
         """
-
-        def parse_var(var: str) -> str:
-            return f"({var})" if var in self.unobserved else var
-
-        def parse_vars(variables: list[str]) -> list[str]:
-            return [parse_var(var) for var in variables]
-
-        def parse_conditional(left: str, right: str) -> str:
-            return f"{parse_var(left)} ⫫ {parse_var(right)}"
-
         if do is not None:
             # Sanity check for do variables
             self._check_nodes(do)
@@ -547,26 +644,9 @@ class DAGSimulator:
         else:
             ignore = []
 
-        graph = _over(self.graph, do)
-        testable = {}
-        untestable = {}
+        cond = self._conditional(do, ignore)
 
-        for c in combinations(graph.nodes, 2):
-            left, right = c
-            indep = nx.find_minimal_d_separator(graph, left, right)
-            if indep is not None:
-                # Skipping if any of the variables is in the ignore list
-                if any(v in ignore for v in [left, right, *indep]):
-                    continue
-
-                key = parse_conditional(left, right)
-                value = parse_vars(indep)
-                if any(v in self.unobserved for v in [left, right, *indep]):
-                    untestable[key] = value
-                else:
-                    testable[key] = value
-
-        if len(testable) == 0 and len(untestable) == 0:
+        if len(cond.testable) == 0 and len(cond.untestable) == 0:
             msg = "The model does not imply any conditional independencies."
             return print(msg)  # noqa: T201
 
@@ -578,18 +658,22 @@ class DAGSimulator:
 
         msg += ":"
 
-        def stringify(d: dict[str, list[str]]) -> str:
+        def stringify(d: dict[str, list[list[str]]]) -> str:
 
-            return "\n  ".join(
-                [
-                    f"{ind} | " + ",".join(list(s)) if len(s) > 0 else ind
-                    for ind, s in d.items()
-                ]
-            )
+            def parse_indep(key: str, value: list[str]) -> str:
+                return f"{key} | " + ",".join(value)
 
-        if len(testable) > 0:
-            msg += f"\nTestable:\n  {stringify(testable)}"
-        if len(untestable) > 0:
-            msg += f"\nUntestable (some variables are unobserved):\n  {stringify(untestable)}"  # noqa: E501
+            strings = [
+                parse_indep(key, value)
+                for key, values in d.items()
+                for value in values
+            ]
+
+            return "\n  ".join(strings)
+
+        if len(cond.testable) > 0:
+            msg += f"\nTestable:\n  {stringify(cond.testable)}"
+        if len(cond.untestable) > 0:
+            msg += f"\nUntestable (some variables are unobserved):\n  {stringify(cond.untestable)}"  # noqa: E501
 
         return print(msg)  # noqa: T201

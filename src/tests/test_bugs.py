@@ -1,52 +1,21 @@
 # Tests based on real world bugs
-from dataclasses import dataclass, field
 
-import numpy as np
-import numpy.typing as npt
-import polars as pl
+from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
 from sim_dags.probability import p, p_array
-
-
-@dataclass
-class Parameters:
-    """Parameters for realistic DAG."""
-
-    seed: int
-    alpha: int = 2
-    num_r: int = 5
-    num_a: int = 4
-    num_o: int = 5
-    pr: npt.NDArray[np.float64] = field(init=False)
-    pa_r: npt.NDArray[np.float64] = field(init=False)
-    po_ar: npt.NDArray[np.float64] = field(init=False)
-    pn_oar: npt.NDArray[np.float64] = field(init=False)
-
-    def __post_init__(self) -> None:
-        """Initialise parameters."""
-        rng = np.random.default_rng(self.seed)
-        self.pr = rng.dirichlet(np.repeat(self.alpha, self.num_r))
-        self.pa_r = rng.dirichlet(np.repeat(self.alpha, self.num_a), size=self.num_r)
-        self.po_ar = rng.dirichlet(
-            np.repeat(self.alpha, self.num_o), size=(self.num_a, self.num_r)
-        )
-        self.pn_oar = rng.uniform(size=(self.num_o, self.num_a, self.num_r))
-
-
-def sim_dag(size: int, params: Parameters, seed: int) -> pl.DataFrame:
-    """Simulate from DAG."""
-    rng = np.random.default_rng(seed)
-    r = rng.choice(params.num_r, p=params.pr, size=size)
-    a = rng.multinomial(1, pvals=params.pa_r[r]).argmax(axis=1)
-    o = rng.multinomial(1, pvals=params.po_ar[a, r]).argmax(axis=1)
-    n = rng.binomial(1, p=params.pn_oar[o, a, r])
-
-    return pl.DataFrame({"r": r, "a": a, "o": o, "n": n})
 
 
 def test_p_array_duplicates() -> None:
     """Testing a bug where duplicates caused p_array to fail on MultiIndex conversion."""  # noqa: E501
-    params = Parameters(12346)
-    sim = sim_dag(100, params, 12345)
+    dag = DAGSimulator(
+        [
+            Categorical("r", 4),
+            Categorical("a", 3, ["r"]),
+            Categorical("o", 5, ["a", "r"]),
+            Binomial("n", ["o", "a", "r"]),
+        ]
+    )
+
+    sim = dag.sample(100, 12345)
 
     p(sim, "n|o")
     p_array(sim, "n|o")
@@ -56,3 +25,45 @@ def test_p_array_duplicates() -> None:
 
     p(sim, "n|o,a,r")
     p_array(sim, "n|o,a,r")
+
+
+def test_realistic_dag() -> None:
+    """Bugs encountered on realistic DAG."""
+    distributions = [
+        Binomial("C"),
+        Binomial("G", ["C"]),
+        Binomial("L", ["C"]),
+        Binomial("A", ["C"]),
+        Binomial("T", ["G"]),
+        Binomial("O", ["G", "T"]),
+        Binomial("M", ["G", "L", "O", "A"], unobserved=True),
+        Binomial("D", ["T", "O", "M", "G"], unobserved=True),
+        Binomial("S", ["T", "D"]),
+        Binomial("I", ["C", "G", "L", "T", "O", "S"]),
+        Binomial("N", ["I", "D"]),
+    ]
+    dag = DAGSimulator(distributions)
+
+    backdoor = dag._backdoor("O", "N", [])  # noqa: SLF001
+    assert len(backdoor.adjustment_sets) == 1, "Should be one valid adjustment set."
+    assert sorted(backdoor.adjustment_sets[0]) == ["G", "T"], (
+        "Incorrect adjustment set found."
+    )
+
+    do_backdoor = dag._backdoor("O", "N", ["I"])  # noqa: SLF001
+    assert len(do_backdoor.adjustment_sets) == 1, (
+        "Should be one valid adjustment set."
+    )
+    assert sorted(do_backdoor.adjustment_sets[0]) == ["G", "T"], (
+        "Incorrect adjustment set found."
+    )
+
+    cond = dag._conditional([], [])  # noqa: SLF001
+
+    testable_len = sum(len(value) for value in cond.testable.values())
+
+    assert testable_len == 15, "Incorrect number of testable independencies."  # noqa: PLR2004
+    assert cond.testable["A ⫫ T"] == [["C"], ["G"]], "Problem with A ⫫ T"
+    assert cond.testable["A ⫫ O"] == [["C"], ["G"]], "Problem with A ⫫ O"
+    assert cond.testable["L ⫫ T"] == [["C"], ["G"]], "Problem with L ⫫ T"
+    assert cond.testable["L ⫫ O"] == [["C"], ["G"]], "Problem with L ⫫ O"

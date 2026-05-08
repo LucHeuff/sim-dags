@@ -9,6 +9,7 @@ authors = [
 ]
 dependencies = [
   "altair>=6.1.0",
+  "more-itertools>=11.0.2",
   "networkx>=3.6.1",
   "pandera[polars]>=0.29.0",
   "polars>=1.38.1",
