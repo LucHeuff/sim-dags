@@ -150,12 +150,30 @@ class Binomial:
     param_seed: int | None = None
 
 
+# --- Separating out intervention functions for easier testing
+def _do_fixed(value: int, size: int) -> np.ndarray:
+    """Intervene on a variable with a fixed value."""
+    return np.repeat(value, size)
+
+
+def _do_uniform(categories: int, size: int, rng: np.random.Generator) -> np.ndarray:
+    """Intervene on a variable uniformly."""
+    values = np.arange(categories)
+    counts = np.full(categories, size // categories)
+    # rounded down, so might need to add on remainder
+    counts[: size % categories] += 1
+    assert (s := sum(counts)) == size, f"SUm adds to {s}, not {size}"
+
+    samples = np.repeat(values, counts)
+    rng.shuffle(samples)
+    return samples
+
+
 class Generator(ABC):
     """Interface for generators."""
 
     distribution: Distribution
     parameters: np.ndarray
-    do_parameters: np.ndarray
 
     @property
     def do_name(self) -> str:
@@ -166,6 +184,11 @@ class Generator(ABC):
     def parents(self) -> int:
         """Get the number of ancestors for this variable."""
         return len(self.distribution.parents)
+
+    @property
+    def categories(self) -> int:
+        """Get the number of categories for this variable."""
+        return self.distribution.categories
 
     @property
     def name(self) -> str:
@@ -202,7 +225,6 @@ class Generator(ABC):
         """Generate samples without intervention."""
         ...
 
-    @abstractmethod
     def do(
         self,
         value: bool | int,  # noqa: FBT001
@@ -210,7 +232,12 @@ class Generator(ABC):
         rng: np.random.Generator,
     ) -> np.ndarray:
         """Generate smaples under intervention."""
-        ...
+        if not isinstance(value, bool):
+            self._check_values(value)
+            samples = _do_fixed(value, size)
+        else:
+            samples = _do_uniform(self.categories, size, rng)
+        return self._check_samples(samples, size)
 
 
 class CategoricalGenerator(Generator):
@@ -237,7 +264,6 @@ class CategoricalGenerator(Generator):
         # as last dimension
         categories = self.distribution.categories
         self.parameters = rng.dirichlet(np.repeat(alpha, categories), size=shape)
-        self.do_parameters = np.repeat(1 / categories, categories)
 
     def sample(
         self, inputs: np.ndarray, size: int, rng: np.random.Generator
@@ -247,22 +273,6 @@ class CategoricalGenerator(Generator):
         p = self.parameters[*inputs] if self.parents != 0 else self.parameters
         s = None if self.parents != 0 else size
         samples = rng.multinomial(1, pvals=p, size=s).argmax(axis=1)
-        return self._check_samples(samples, size)
-
-    def do(
-        self,
-        value: bool | int,  # noqa: FBT001
-        size: int,
-        rng: np.random.Generator,
-    ) -> np.ndarray:
-        """Generate categorical samples under intervention."""
-        if not isinstance(value, bool):
-            self._check_values(value)
-            samples = np.repeat(value, size)
-        else:
-            samples = rng.choice(
-                self.distribution.categories, p=self.do_parameters, size=size
-            )
         return self._check_samples(samples, size)
 
 
@@ -295,15 +305,6 @@ class BinomialGenerator(Generator):
         s = None if self.parents != 0 else size
 
         samples = rng.binomial(1, p=p, size=s)
-        return self._check_samples(samples, size)
-
-    def do(self, value: int, size: int, rng: np.random.Generator) -> np.ndarray:
-        """Generate binomial samples under intervention."""
-        if not isinstance(value, bool):
-            self._check_values(value)
-            samples = np.repeat(value, size)
-        else:
-            samples = rng.binomial(1, p=0.5, size=size)
         return self._check_samples(samples, size)
 
 

@@ -1,10 +1,16 @@
 from dataclasses import dataclass
 
+import hypothesis.strategies as st
 import networkx as nx
+import numpy as np
 import pytest
-from numpy.testing import assert_equal, assert_raises
+from hypothesis import given
+from numpy.ma.testutils import assert_array_equal
+from numpy.testing import assert_allclose, assert_equal, assert_raises
 from sim_dags import Binomial, Categorical, DAGSimulator
 from sim_dags.dag_simulator import (
+    _do_fixed,
+    _do_uniform,
     _find_minimal_adjustment_set,
     _find_minimal_d_separators,
     _over,
@@ -135,6 +141,65 @@ def test_find_minimal_d_separators() -> None:
     )
     assert _find_minimal_d_separators(graph, "v", "w") == [[]], (
         "wrong d-separators for v ⫫ w"
+    )
+
+
+# ---- Tests for intervention functions
+
+
+def test_basic_do_fixed() -> None:
+    """Basic test of _do_fixed()."""
+    value, size = 2, 13
+    do = _do_fixed(value, size)
+    assert len(do) == size, "do has the wrong size"
+    assert len(np.unique(do)) == 1, "do doesn't have 1 unique value"
+    assert np.unique(do)[0] == value, "do has incorrect value"
+
+
+@given(value=st.integers(0, 15), size=st.integers(100, 1000))
+def test_do_fixed(value: int, size: int) -> None:
+    """Randomized test of _do_fixed()."""
+    do = _do_fixed(value, size)
+    assert len(do) == size, "do has the wrong size"
+    assert len(np.unique(do)) == 1, "do doesn't have 1 unique value"
+    assert np.unique(do)[0] == value, "do has incorrect value"
+
+
+def test_basic_do_uniform() -> None:
+    """Basic test of _do_uniform()."""
+    rng = np.random.default_rng(12345)
+    categories, size = 7, 23  # both primes
+    do = _do_uniform(categories, size, rng)
+    assert len(do) == size, "do has the wrong size"
+    assert len(np.unique(do)) == categories, "do has incorrect categories"
+
+    categories, size = 5, 100
+    do = _do_uniform(categories, size, rng)
+    values, counts = np.unique(do, return_counts=True)
+    frequencies = counts / size
+    assert_array_equal(
+        values, np.arange(categories), err_msg="do has incorrect values"
+    )
+    assert np.all(frequencies == 1 / categories), "do has incorrect frequencies"
+
+
+@given(categories=st.integers(1, 29), size=st.integers(100, 1000))
+def test_do_uniform(categories: int, size: int) -> None:
+    """Randomized test of _do_uniform()."""
+    rng = np.random.default_rng(12345)
+    do = _do_uniform(categories, size, rng)
+    values, counts = np.unique(do, return_counts=True)
+    frequencies = counts / size
+    assert len(do) == size, "do has the wrong size"
+    assert len(values) == categories, "do has incorrect categories"
+    assert_array_equal(
+        values, np.arange(categories), err_msg="do has incorrect values"
+    )
+    assert_allclose(
+        frequencies,
+        np.repeat(1 / categories, categories),
+        err_msg="do as incorrect frequencies",
+        atol=0.01,
     )
 
 
@@ -376,18 +441,31 @@ def test_conditional_indepencencies_raises_missing_variable(
 def test_fix_seeds() -> None:
     """Test if fixing seeds works as intended."""
     dag1 = DAGSimulator(
-        [Binomial("x"), Categorical("y", 4, param_seed=10)], seed=12345
+        [
+            Binomial("x"),
+            Categorical("y", 4, param_seed=10),
+            Binomial("z", param_seed=5),
+        ],
+        seed=12345,
     )
     dag2 = DAGSimulator(
-        [Binomial("x"), Categorical("y", 4, param_seed=10)], seed=54321
+        [
+            Binomial("x"),
+            Categorical("y", 4, param_seed=10),
+            Binomial("z", param_seed=5),
+        ],
+        seed=54321,
     )
 
     x1 = dag1.generators["x"].parameters
     x2 = dag2.generators["x"].parameters
     y1 = dag1.generators["y"].parameters
     y2 = dag2.generators["y"].parameters
+    z1 = dag1.generators["z"].parameters
+    z2 = dag2.generators["z"].parameters
 
     assert_equal(y1, y2, err_msg="Parameters are different, but should be the same")
+    assert_equal(z1, z2, err_msg="Parameters are different, but should be the same")
     with assert_raises(AssertionError):
         assert_equal(x1, x2, err_msg="Parameters should not be equal")
 
