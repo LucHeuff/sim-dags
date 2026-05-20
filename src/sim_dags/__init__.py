@@ -1,5 +1,6 @@
 # ruff: noqa: F401
-from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
+from sim_dags.dag_simulator import DAGSimulator
+from sim_dags.generators import Binomial, Categorical
 from sim_dags.iterate_sims import (
     build_compare_function,
     iterate_simulations,

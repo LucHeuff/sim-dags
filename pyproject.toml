@@ -1,6 +1,6 @@
 [project]
 name = "sim-dags"
-version = "1.1.4"
+version = "1.2.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -17,9 +17,6 @@ dependencies = [
   "scipy>=1.17.1",
   "xarray>=2026.2.0",
 ]
-
-[project.scripts]
-sim-dags = "sim_dags:main"
 
 [dependency-groups]
 dev = [

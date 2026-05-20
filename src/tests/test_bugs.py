@@ -1,6 +1,7 @@
 # Tests based on real world bugs
 
 from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
+from sim_dags.graph_algorithms import backdoor_criterion, conditional_independencies
 from sim_dags.probability import p, p_array
 
 
@@ -39,18 +40,18 @@ def test_realistic_dag() -> None:
         Binomial("M", ["G", "L", "O", "A"], unobserved=True),
         Binomial("D", ["T", "O", "M", "G"], unobserved=True),
         Binomial("S", ["T", "D"]),
-        Binomial("I", ["C", "G", "L", "T", "O", "S"]),
+        Binomial("I", ["C", "G", "L", "T", "O", "S", "A"]),
         Binomial("N", ["I", "D"]),
     ]
     dag = DAGSimulator(distributions)
 
-    backdoor = dag._backdoor("O", "N", [])  # noqa: SLF001
+    backdoor = backdoor_criterion(dag.graph, "O", "N", [], set())
     assert len(backdoor.adjustment_sets) == 1, "Should be one valid adjustment set."
     assert sorted(backdoor.adjustment_sets[0]) == ["G", "T"], (
         "Incorrect adjustment set found."
     )
 
-    do_backdoor = dag._backdoor("O", "N", ["I"])  # noqa: SLF001
+    do_backdoor = backdoor_criterion(dag.graph, "O", "N", ["I"], set())
     assert len(do_backdoor.adjustment_sets) == 1, (
         "Should be one valid adjustment set."
     )
@@ -58,12 +59,26 @@ def test_realistic_dag() -> None:
         "Incorrect adjustment set found."
     )
 
-    cond = dag._conditional([], [])  # noqa: SLF001
+    cond = conditional_independencies(dag.graph, None, None, dag.unobserved)
 
-    testable_len = sum(len(value) for value in cond.testable.values())
-
+    testable_len = len(cond.testable)
+    # confirmed via dagitty.net/dgas.html#
+    correct = [
+        "C ⫫ T | G",
+        "C ⫫ O | G",
+        "C ⫫ S | A,G,L",
+        "C ⫫ N | A,G,I,L,O,S,T",
+        "G ⫫ L | C",
+        "G ⫫ A | C",
+        "L ⫫ A | C",
+        "L ⫫ T | C",
+        "L ⫫ T | G",
+        "L ⫫ O | C",
+        "L ⫫ O | G",
+        "A ⫫ T | C",
+        "A ⫫ T | G",
+        "A ⫫ O | C",
+        "A ⫫ O | G",
+    ]
     assert testable_len == 15, "Incorrect number of testable independencies."  # noqa: PLR2004
-    assert cond.testable["A ⫫ T"] == [["C"], ["G"]], "Problem with A ⫫ T"
-    assert cond.testable["A ⫫ O"] == [["C"], ["G"]], "Problem with A ⫫ O"
-    assert cond.testable["L ⫫ T"] == [["C"], ["G"]], "Problem with L ⫫ T"
-    assert cond.testable["L ⫫ O"] == [["C"], ["G"]], "Problem with L ⫫ O"
+    assert cond.testable == correct

@@ -40,3 +40,7 @@ class UnknownDistributionError(SimDagError):
 
 class MissingDistributionError(SimDagError):
     """Raised when a variable does not have an associated distribution."""
+
+
+class DuplicateVariableError(SimDagError):
+    """Raised when trying to construct a DAGSimulator with duplicate variables."""

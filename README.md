@@ -47,11 +47,15 @@ interventions = dag_simulator.sample(size, seed, do={"X": True, "Z": 1})
 ```
 For more examples see [`example_generators.py`](https://github.com/LucHeuff/sim-dags/blob/main/src/sim_dags/example_generators.py).
 
-The `DAGSimulator` also provides the `backdoor_criterion` and `conditional_independencies` methods.
-`backdoor_criterion("x", "y")` calculates the required adjustment set for $X \rightarrow Y$ in the current DAG using the backdoor criterion.
-Optionally the `do` argument can be used to apply the backdoor criterion under interventions on different variables.
+The `DAGSimulator` also provides the following convenience methods:
+- `backdoor_criterion(exposure, outcome, do)` calculate the required adjustment set for `exposure` $\rightarrow$ `outcome`, optionally under interventions `do`.
+- `conditional_independencies(do, ignore, show)` shows the conditional independencies that are implied by the DAG, optionally under inteventions `do`. `ignore` removes variables from consideration (except if in $Z$), and `show` allows determining which independencies ("testable", "untestable" or "both") are shown.
+- `mutilate(over, under)` returns a `nx.DiGraph` under mutilations, where `over` removes arrows pointing at these variables, and `under` removes arrows coming out of these variables.
+- `is_d_separator(x, y, z, over, under)` allows testing if `z` d-separates `x` from `y`, optionally under mutilations `over` and `under`.
+- `dagitty_code(over, under)` prints the graph in the [Dagitty](dagitty.net/dags.html) code format, optionally under mutilations `over` and `under`.
 
-`conditional_independencies` shows the conditional independencies that are implied by the DAG. Again, this contains an optional `do` argument to calculate conditional independencies under some intervention.
+See the docstrings or `help()` for more specifics on these functions.
+
 
 ## Validation
 
@@ -127,5 +131,4 @@ This is what the `p` and `p_array` functions are for. These both calculate (cond
 - `include_zeros`: whether you want to include cases that do not appear in the data, meaning they have zero probability. Turned off by default, and only available for `p`.
 
 To convert `xarray.DataArray` into `polars.DataFrame`, the `to_df` convenience function is provided.
-
 

@@ -1,207 +1,20 @@
 from dataclasses import dataclass
 
-import hypothesis.strategies as st
-import networkx as nx
-import numpy as np
 import pytest
-from hypothesis import given
-from numpy.ma.testutils import assert_array_equal
-from numpy.testing import assert_allclose, assert_equal, assert_raises
+from numpy.testing import assert_equal, assert_raises
 from sim_dags import Binomial, Categorical, DAGSimulator
-from sim_dags.dag_simulator import (
-    _do_fixed,
-    _do_uniform,
-    _find_minimal_adjustment_set,
-    _find_minimal_d_separators,
-    _over,
-    _under,
-)
 from sim_dags.example_generators import (
-    get_collider_simulator,
     get_fork_simulator,
     get_pipe_simulator,
 )
 from sim_dags.exceptions import (
+    DuplicateVariableError,
     InvalidDoValueError,
     MissingDistributionError,
     UnknownDistributionError,
     UnknownDoVariableError,
     VariableNotInDAGError,
 )
-
-# --- Tests for supportive functions
-
-
-@pytest.fixture
-def graph() -> nx.DiGraph:
-    """Basic network graph."""
-    nodes = ["a", "b", "c"]
-    edges = [("a", "b"), ("a", "c"), ("b", "c")]
-    graph = nx.DiGraph()
-    graph.add_nodes_from(nodes)
-    graph.add_edges_from(edges)
-
-    return graph
-
-
-def test_over(graph: nx.DiGraph) -> None:
-    """Test _over()."""
-    assert set(_over(graph, ["a"]).edges) == set(graph.edges), (
-        "over(a) edges incorrect"
-    )
-    assert set(_over(graph, ["b"]).edges) == {
-        ("a", "c"),
-        ("b", "c"),
-    }, "over(b) edges incorrect"
-    assert set(_over(graph, ["c"]).edges) == {("a", "b")}, "over(c) edges incorrect"
-    assert set(_over(graph, ["a", "b"]).edges) == {("a", "c"), ("b", "c")}, (
-        "over(a, b) edges incorrect"
-    )
-    assert set(_over(graph, ["a", "b", "c"]).edges) == set(), (
-        "over(a, b, c) edges incorrect"
-    )
-
-
-def test_under(graph: nx.DiGraph) -> None:
-    """Test _under()."""
-    assert set(_under(graph, ["a"]).edges) == {("b", "c")}, (
-        "under(a) edges incorrect"
-    )
-    assert set(_under(graph, ["b"]).edges) == {
-        ("a", "b"),
-        ("a", "c"),
-    }, "under(b) edges incorrect"
-    assert set(_under(graph, ["c"]).edges) == set(graph.edges), (
-        "under(c) edges incorrect"
-    )
-    assert set(_under(graph, ["a", "b"]).edges) == set(), (
-        "under(a, b) edges incorrect"
-    )
-    assert set(_under(graph, ["a", "b", "c"]).edges) == set(), (
-        "under(a, b, c) edges incorrect"
-    )
-
-
-def test_find_minimal_adjustment_set() -> None:
-    """Test _find_minimal_adjustment_set()."""
-    assert _find_minimal_adjustment_set(["b"], [["a", "b", "c"]]) == [["b"]], (
-        "incorrect adjustment set."
-    )
-    assert _find_minimal_adjustment_set([], [["a", "b", "c"]]) is None, (
-        "incorrect adjustment set."
-    )
-    assert _find_minimal_adjustment_set(["d"], [["a", "b", "c"]]) is None, (
-        "incorrect adjustment set."
-    )
-    assert _find_minimal_adjustment_set(
-        ["b", "c", "d"],
-        [["a", "c", "e"], ["a", "b", "c", "d", "e"], ["a", "b", "d", "e"]],
-    ) == [["b", "c"], ["c", "d"]], "Incorrect adjustment set"
-
-
-def test_find_minimal_d_separators() -> None:
-    """Test _find_minimal_d_separators()."""
-    # Simple model with no
-    simple_graph = nx.DiGraph()
-    simple_graph.add_edges_from([("x", "z"), ("x", "y"), ("z", "y")])
-    assert _find_minimal_d_separators(simple_graph, "x", "y") is None, (
-        "Simple graph shouldn't have d-separators"
-    )
-    assert _find_minimal_d_separators(simple_graph, "x", "z") is None, (
-        "Simple graph shouldn't have d-separators"
-    )
-    assert _find_minimal_d_separators(simple_graph, "y", "z") is None, (
-        "Simple graph shouldn't have d-separators"
-    )
-
-    # Somewhat more complicated model
-    graph = nx.DiGraph()
-    graph.add_edges_from(
-        [
-            ("v", "r"),
-            ("w", "r"),
-            ("w", "y"),
-            ("x", "v"),
-            ("x", "y"),
-            ("z", "x"),
-            ("z", "y"),
-        ]
-    )
-    assert _find_minimal_d_separators(graph, "x", "r") == [["v"]], (
-        "wrong d-separators for x ⫫ r"
-    )
-    assert _find_minimal_d_separators(graph, "x", "w") == [[]], (
-        "wrong d-separators for x ⫫ w"
-    )
-    assert _find_minimal_d_separators(graph, "y", "v") == [["x"]], (
-        "wrong d-separators for y ⫫ v"
-    )
-    assert _find_minimal_d_separators(graph, "y", "r") == [["w", "x"], ["v", "w"]], (
-        "wrong d-separators for y ⫫ r"
-    )
-    assert _find_minimal_d_separators(graph, "v", "w") == [[]], (
-        "wrong d-separators for v ⫫ w"
-    )
-
-
-# ---- Tests for intervention functions
-
-
-def test_basic_do_fixed() -> None:
-    """Basic test of _do_fixed()."""
-    value, size = 2, 13
-    do = _do_fixed(value, size)
-    assert len(do) == size, "do has the wrong size"
-    assert len(np.unique(do)) == 1, "do doesn't have 1 unique value"
-    assert np.unique(do)[0] == value, "do has incorrect value"
-
-
-@given(value=st.integers(0, 15), size=st.integers(100, 1000))
-def test_do_fixed(value: int, size: int) -> None:
-    """Randomized test of _do_fixed()."""
-    do = _do_fixed(value, size)
-    assert len(do) == size, "do has the wrong size"
-    assert len(np.unique(do)) == 1, "do doesn't have 1 unique value"
-    assert np.unique(do)[0] == value, "do has incorrect value"
-
-
-def test_basic_do_uniform() -> None:
-    """Basic test of _do_uniform()."""
-    rng = np.random.default_rng(12345)
-    categories, size = 7, 23  # both primes
-    do = _do_uniform(categories, size, rng)
-    assert len(do) == size, "do has the wrong size"
-    assert len(np.unique(do)) == categories, "do has incorrect categories"
-
-    categories, size = 5, 100
-    do = _do_uniform(categories, size, rng)
-    values, counts = np.unique(do, return_counts=True)
-    frequencies = counts / size
-    assert_array_equal(
-        values, np.arange(categories), err_msg="do has incorrect values"
-    )
-    assert np.all(frequencies == 1 / categories), "do has incorrect frequencies"
-
-
-@given(categories=st.integers(1, 29), size=st.integers(100, 1000))
-def test_do_uniform(categories: int, size: int) -> None:
-    """Randomized test of _do_uniform()."""
-    rng = np.random.default_rng(12345)
-    do = _do_uniform(categories, size, rng)
-    values, counts = np.unique(do, return_counts=True)
-    frequencies = counts / size
-    assert len(do) == size, "do has the wrong size"
-    assert len(values) == categories, "do has incorrect categories"
-    assert_array_equal(
-        values, np.arange(categories), err_msg="do has incorrect values"
-    )
-    assert_allclose(
-        frequencies,
-        np.repeat(1 / categories, categories),
-        err_msg="do as incorrect frequencies",
-        atol=0.01,
-    )
-
 
 # ---- Tests for DAGSimulator
 
@@ -267,77 +80,6 @@ def test_dag_simulator_sample(simulator: DAGSimulator) -> None:
     assert len(do_y_1_samples) == size, "do_y_1_samples has the wrong size"
 
 
-def test_dag_path_has_collider() -> None:
-    """Test DAGSimulator._path_has_collider()."""
-    collider = get_collider_simulator()
-
-    assert not collider._path_has_collider(["x", "y"]), (  # noqa: SLF001
-        "x -> y should be too short for collider"
-    )
-    assert collider._path_has_collider(["x", "z", "y"]), (  # noqa: SLF001
-        "x -> z <- y should contain collider"
-    )
-
-
-def test_dag_backdoor(
-    m_model_simulator: DAGSimulator, complex_model_simulator: DAGSimulator
-) -> None:
-    """Test DAGSimulator._backdoor()."""
-    pipe = get_pipe_simulator()
-    pipe_back = pipe._backdoor("x", "y", [])  # noqa: SLF001
-    assert pipe_back.backdoor_paths == [], "Pipe should have no backdoor paths."
-    assert pipe_back.open_paths == [], "Pipe should have no open paths"
-    assert pipe_back.adjustment_sets == [], "Pipe doesn't need adjustment"
-
-    fork = get_fork_simulator()
-    fork_back = fork._backdoor("x", "y", [])  # noqa: SLF001
-    assert fork_back.backdoor_paths == [["x", "z", "y"]], (
-        "Fork should have x -> z -> y backdoor path"
-    )
-    assert fork_back.open_paths == [["x", "z", "y"]], (
-        "Fork should have x -> z -> y open path"
-    )
-    assert fork_back.adjustment_sets == [["z"]], "Fork adjustment set should be {z}"
-
-    m_back = m_model_simulator._backdoor("x", "y", [])  # noqa: SLF001
-    assert m_back.backdoor_paths == [["x", "w", "z", "v", "y"]], (
-        "M model should have one backdoor path"
-    )
-    assert m_back.open_paths == [], "M backdoor paths should be closed by collider z"
-    assert m_back.adjustment_sets == [], "M should need no adjustment"
-
-    # Model with an open backdoor path and available variables, but no adjustment set
-    unobs_back = complex_model_simulator._backdoor("x", "y", [])  # noqa: SLF001
-    assert unobs_back.backdoor_paths == [["x", "z", "y"]], (
-        "unobs model should have x -> z -> y backdoor path"
-    )
-    assert unobs_back.open_paths == [["x", "z", "y"]], (
-        "unobs model should have x -> z -> y open path"
-    )
-    assert unobs_back.adjustment_sets == [], (
-        "unobs model should have no adjustment set"
-    )
-
-    # Fork with unobserved to test if there are no variables available
-    unobs_fork = DAGSimulator(
-        [
-            Categorical("z", 3, unobserved=True),
-            Categorical("x", 4, ["z"]),
-            Binomial("y", ["x", "z"]),
-        ]
-    )
-    unobs_fork_back = unobs_fork._backdoor("x", "y", [])  # noqa: SLF001
-    assert unobs_fork_back.backdoor_paths == [["x", "z", "y"]], (
-        "Unobserved Fork should have x -> z -> y backdoor path"
-    )
-    assert unobs_fork_back.open_paths == [["x", "z", "y"]], (
-        "Unobserved Fork should have x -> z -> y open path"
-    )
-    assert unobs_fork_back.adjustment_sets == [], (
-        "Unobserved Fork adjustment set should be empty"
-    )
-
-
 def test_backdoor_criterion(
     m_model_simulator: DAGSimulator, complex_model_simulator: DAGSimulator
 ) -> None:
@@ -353,41 +95,6 @@ def test_backdoor_criterion(
     # Testing when there are backdoor paths
     fork = get_fork_simulator()
     fork.backdoor_criterion("x", "y")
-
-
-def test_conditional(complex_model_simulator: DAGSimulator) -> None:
-    """Test DAGSimulator._conditional()."""
-    cond = complex_model_simulator._conditional([], [])  # noqa: SLF001
-    assert len(cond.testable) == 4, (  # noqa: PLR2004
-        "Complex model should have 4 testable independencies"
-    )
-    assert cond.testable["v ⫫ w"] == [[]], "v ⫫ w independencies incorrect"
-    assert cond.testable["w ⫫ x"] == [[]], "w ⫫ x independencies incorrect"
-    assert cond.testable["r ⫫ x"] == [["v"]], "r ⫫ x independencies incorrect"
-    assert cond.testable["r ⫫ y"] == [["v", "w"]], "r ⫫ y independencies incorrect"
-
-    assert len(cond.untestable) == 4, (  # noqa: PLR2004
-        "Complex model should have 4 untestable independencies."
-    )
-    assert cond.untestable["v ⫫ (z)"] == [[]], "v ⫫ (z) independencies incorrect"
-    assert cond.untestable["v ⫫ y"] == [["x", "(z)"]], (
-        "v ⫫ y independencies incorrect"
-    )
-    assert cond.untestable["w ⫫ (z)"] == [[]], "w ⫫ (z) independencies incorrect"
-    assert cond.untestable["r ⫫ (z)"] == [[]], "r ⫫ (z) independencies incorrect"
-
-    ign_cond = complex_model_simulator._conditional([], ["z"])  # noqa: SLF001
-    assert len(ign_cond.untestable) == 0, (
-        "Ignoring z should leave no untestable independencies"
-    )
-
-    do_cond = complex_model_simulator._conditional(["z"], [])  # noqa: SLF001
-    assert do_cond.untestable == cond.untestable, (
-        "Intervening on Z shouldn't change anything"
-    )
-    assert do_cond.testable == cond.testable, (
-        "Intervening on Z shouldn't change anything"
-    )
 
 
 def test_conditional_indepencencies(complex_model_simulator: DAGSimulator) -> None:
@@ -408,6 +115,34 @@ def test_conditional_indepencencies(complex_model_simulator: DAGSimulator) -> No
 
     complex_model_simulator.conditional_independencies()
     complex_model_simulator.conditional_independencies(ignore=["z"])
+
+    complex_model_simulator.conditional_independencies(show="untestable")
+    complex_model_simulator.conditional_independencies(show="both")
+
+
+def test_mutilate(simulator: DAGSimulator) -> None:
+    """Test mutilate."""
+    no_change = simulator.mutilate()
+
+    assert simulator.graph.nodes == no_change.nodes, "graph shouldn't change"
+    assert simulator.graph.edges == no_change.edges, "graph shouldn't change"
+
+    over_x = simulator.mutilate(over=["x"])
+    assert ("u1", "x") not in over_x.edges, "incorrect edge"
+
+    under_y = simulator.mutilate(under=["y"])
+    assert ("y", "w") not in under_y.edges, "incorrect edge"
+
+
+def test_is_d_separator(simulator: DAGSimulator) -> None:
+    """Test is_d_separator()."""
+    assert simulator.is_d_separator("y", "u1", "x")
+    assert not simulator.is_d_separator("x", "w", "y")
+
+
+def test_dagitty_code(simulator: DAGSimulator) -> None:
+    """Test dagitty_code()."""
+    simulator.dagitty_code()
 
 
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:
@@ -492,4 +227,11 @@ def test_dag_simulator_raises_missing_distribution() -> None:
     """Test if DAGSimulator raises MissingDistributionError."""
     dists = [Categorical("x", 4), Binomial("y", ["x", "z"])]
     with pytest.raises(MissingDistributionError):
+        DAGSimulator(dists)
+
+
+def test_dag_simulator_raises_duplicate_variable() -> None:
+    """Test if DAGSimulator raises DuplicateVariableError."""
+    dists = [Binomial("x"), Categorical("x", 3)]
+    with pytest.raises(DuplicateVariableError):
         DAGSimulator(dists)
