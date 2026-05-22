@@ -150,14 +150,13 @@ class BackdoorCriterion:
 
     def __repr__(self) -> str:
         """Legible string with backdoor criterion output."""
-        msg = ""
         if len(self.backdoor_paths) == 0:
-            msg += "No backdoor paths found, no adjustment is necessary."
+            return "No backdoor paths found, no adjustment is necessary."
         if len(self.open_paths) == 0:
-            msg += "No open backdoor paths found, no adjustment is necessary."
+            return "No open backdoor paths found, no adjustment is necessary."
 
         # Formatting the backdoor paths
-        msg += f"Found {len(self.open_paths)} open paths:\n  {'\n  '.join(self.open_paths)}\n"  # noqa: E501
+        msg = f"Found {len(self.open_paths)} open paths:\n  {'\n  '.join(self.open_paths)}\n"  # noqa: E501
 
         if len(self.adjustment_sets) == 0:
             msg += "No adjustment sets found."
