@@ -1,7 +1,13 @@
 # Tests based on real world bugs
 
 from sim_dags.dag_simulator import Binomial, Categorical, DAGSimulator
-from sim_dags.graph_algorithms import backdoor_criterion, conditional_independencies
+from sim_dags.graphs import (
+    all_simple_paths,
+    backdoor_criterion,
+    conditional_independencies,
+    find_existing_paths,
+    get_descendants,
+)
 from sim_dags.probability import p, p_array
 
 
@@ -45,21 +51,65 @@ def test_realistic_dag() -> None:
     ]
     dag = DAGSimulator(distributions)
 
-    backdoor = backdoor_criterion(dag.graph, "O", "N", [], set())
-    assert len(backdoor.adjustment_sets) == 1, "Should be one valid adjustment set."
-    assert sorted(backdoor.adjustment_sets[0]) == ["G", "T"], (
-        "Incorrect adjustment set found."
+    simple_paths = all_simple_paths(
+        "O",
+        "N",
+        dag.dag._neighbours,  # noqa: SLF001
+        dag.dag._reachable,  # noqa: SLF001
     )
 
-    do_backdoor = backdoor_criterion(dag.graph, "O", "N", ["I"], set())
-    assert len(do_backdoor.adjustment_sets) == 1, (
+    backdoor = backdoor_criterion(
+        "O",
+        "N",
+        dag.dag.edges,
+        simple_paths,
+        dag.unobserved,
+        get_descendants(dag.dag.edges, dag.dag.topological_generations),
+    )
+
+    assert isinstance(repr(backdoor), str)  # mostly for repr coverage
+    assert backdoor.minimal_adjustment_sets is not None, (
+        "Should have adjustment sets"
+    )
+    assert len(backdoor.minimal_adjustment_sets) == 1, (
         "Should be one valid adjustment set."
     )
-    assert sorted(do_backdoor.adjustment_sets[0]) == ["G", "T"], (
+    assert sorted(backdoor.minimal_adjustment_sets) == [["G", "T"]], (
         "Incorrect adjustment set found."
     )
 
-    cond = conditional_independencies(dag.graph, None, None, dag.unobserved)
+    do_edges = dag.dag.mutilate(["I"], None)
+    do_paths = find_existing_paths(do_edges, simple_paths)
+    do_backdoor = backdoor_criterion(
+        "O",
+        "N",
+        do_edges,
+        do_paths,
+        dag.unobserved,
+        get_descendants(do_edges, dag.dag.topological_generations),
+    )
+
+    assert do_backdoor.minimal_adjustment_sets is not None, (
+        "Should have adjustment sets"
+    )
+    assert len(do_backdoor.minimal_adjustment_sets) == 1, (
+        "Should be one valid minimal_adjustment set."
+    )
+    assert sorted(do_backdoor.minimal_adjustment_sets) == [["G", "T"]], (
+        "Incorrect minimal_adjustment set found."
+    )
+
+    # WTF ordering effect? Hoe dan?
+    cond = conditional_independencies(
+        dag.dag.topological_sort,
+        dag.dag.edges,
+        set(),
+        dag.unobserved,
+        dag.dag._neighbours,  # noqa: SLF001
+        get_descendants(dag.dag.edges, dag.dag.topological_generations),
+        dag.dag._reachable,  # noqa: SLF001
+        testable_only=True,
+    )
 
     testable_len = len(cond.testable)
     # confirmed via dagitty.net/dgas.html#
@@ -68,17 +118,20 @@ def test_realistic_dag() -> None:
         "C ⫫ O | G",
         "C ⫫ S | A,G,L",
         "C ⫫ N | A,G,I,L,O,S,T",
-        "G ⫫ L | C",
-        "G ⫫ A | C",
-        "L ⫫ A | C",
-        "L ⫫ T | C",
-        "L ⫫ T | G",
-        "L ⫫ O | C",
-        "L ⫫ O | G",
+        "A ⫫ G | C",
+        "A ⫫ L | C",
         "A ⫫ T | C",
         "A ⫫ T | G",
         "A ⫫ O | C",
         "A ⫫ O | G",
+        "G ⫫ L | C",
+        "L ⫫ T | C",
+        "L ⫫ T | G",
+        "L ⫫ O | C",
+        "L ⫫ O | G",
     ]
-    assert testable_len == 15, "Incorrect number of testable independencies."  # noqa: PLR2004
-    assert cond.testable == correct
+    assert testable_len == len(correct), (
+        "Incorrect number of testable independencies."
+    )
+    assert cond.testable == correct, "Incorrect independencies"
+    assert cond.untestable == [], "Should be no untestable dependencies"

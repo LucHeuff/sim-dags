@@ -1,9 +1,8 @@
 from collections import Counter
 from collections.abc import Sequence
 from functools import cached_property
-from typing import Literal, Protocol
+from typing import Protocol
 
-import networkx as nx
 import numpy as np
 import pandera.polars as pa
 import polars as pl
@@ -12,18 +11,13 @@ from pydantic.dataclasses import dataclass
 from sim_dags.distributions import Binomial, Categorical
 from sim_dags.exceptions import (
     DuplicateVariableError,
-    MissingDistributionError,
     UnknownDistributionError,
     UnknownDoVariableError,
     VariableNotInDAGError,
 )
 from sim_dags.generators import BinomialGenerator, CategoricalGenerator, Generator
-from sim_dags.graph_algorithms import (
-    backdoor_criterion,
-    calculate_node_positions,
-    conditional_independencies,
-    mutilate,
-)
+from sim_dags.graph_algorithms import dagitty_code
+from sim_dags.graphs import CIOptions, DirectedAcyclicGraph
 
 # ---- Supporting functions
 
@@ -52,8 +46,7 @@ class DAGSimulator:
     Intended for validating estimands derived from DAGs.
     """
 
-    graph: nx.DiGraph
-    topological_sort: list[str]
+    dag: DirectedAcyclicGraph
     distributions: dict[str, Distribution]
     generators: dict[str, Generator]
     schema: pa.DataFrameSchema
@@ -81,33 +74,20 @@ class DAGSimulator:
             msg = f"Variables {duplicates} are duplicated, please check your distributions."  # noqa: E501
             raise DuplicateVariableError(msg)
 
-        self.graph = nx.DiGraph()
         self.distributions = {d.name: d for d in distributions}
 
         # setting up the DAG from the provided distributions
         nodes = self.distributions.keys()
         edges = [(anc, d.name) for d in distributions for anc in d.parents]
 
-        self.graph.add_nodes_from(nodes)
-        self.graph.add_edges_from(edges)
-
-        # Sanity checks
-        assert nx.is_directed_acyclic_graph(self.graph), (
-            "Provided distributions do not form a DAG."
-        )
-
-        # checking if nodes were added through edges that do not have a distribution
-        if len(miss := (set(self.graph.nodes).difference(nodes))) > 0:
-            msg = f"{miss} are mentioned as ancestors but do not have an associated distribution."  # noqa: E501
-            raise MissingDistributionError(msg)
-
+        self.dag = DirectedAcyclicGraph(nodes, edges)
         # setting up the generators -> requires knowing distributions of ancestors
         rng = np.random.default_rng(seed)
 
         def get_generator(node: str) -> Generator:
             """Fetch generator for a specific node."""
             variable = self.distributions[node]
-            parents = [self.distributions[p] for p in self.graph.predecessors(node)]
+            parents = [self.distributions[p] for p in self.dag.parents[node]]
             match variable:
                 case Binomial():
                     return BinomialGenerator(variable, parents, rng)
@@ -117,14 +97,13 @@ class DAGSimulator:
                     msg = f"No known generator for {variable.__class__.__name__}"
                     raise UnknownDistributionError(msg)
 
-        self.generators = {node: get_generator(node) for node in self.graph.nodes}
+        self.generators = {node: get_generator(node) for node in self.dag.nodes}
 
         assert len(self.distributions) == len(self.generators), (
             "Unequal number of generators and distributions"
         )
 
         # setting up class attributes that only need to be calculated once.
-        self.topological_sort = list(nx.topological_sort(self.graph))
         self.schema = pa.DataFrameSchema(
             columns={
                 d.name: pa.Column(int, pa.Check.isin(list(range(d.categories))))
@@ -134,7 +113,7 @@ class DAGSimulator:
         )
 
     def _check_nodes(self, nodes: list[str]) -> None:
-        missing = set(nodes) - set(self.graph.nodes)
+        missing = set(nodes) - set(self.dag.nodes)
         if len(missing) > 0:
             msg = f"{missing} do not appear in the DAG."
             raise VariableNotInDAGError(msg)
@@ -166,7 +145,7 @@ class DAGSimulator:
         # validating and processing inputs
         if do is not None:
             do_nodes = set(do)
-            nodes = set(self.graph.nodes)
+            nodes = set(self.dag.nodes)
             if len(m := do_nodes.difference(nodes)) > 0:
                 msg = f"\n\t{m}\ndo not appear in the DAG, available variables are\n\t{nodes} "  # noqa: E501
                 raise UnknownDoVariableError(msg)
@@ -179,13 +158,13 @@ class DAGSimulator:
 
         rng = np.random.default_rng(seed)
 
-        for node in self.topological_sort:
+        for node in self.dag.topological_sort:
             generator = self.generators[node]
             if node in do:
                 results[node] = generator.do(do[node], size, rng)
                 rename[node] = generator.do_name
             else:
-                parents = list(self.graph.predecessors(node))
+                parents = list(self.dag.parents[node])
                 inputs = np.asarray([results[anc] for anc in parents])
                 results[node] = generator.sample(inputs, size, rng)
 
@@ -214,34 +193,25 @@ class DAGSimulator:
 
         """
         self._check_nodes([exposure, outcome])
-        # should make sure the desired causal path exists in the first place
-        if not nx.has_path(self.graph, exposure, outcome):
-            msg = f"The path {exposure} -> {outcome} does not appear in the DAG."
-            return print(msg)  # noqa: T201
-
-        # This message is going to be added to conditionally
-        msg = f"Causal effect of {exposure} -> {outcome}.\n"
-
         if do is not None:
             self._check_nodes(do)
         else:
-            do = []  # making sure do is a list
+            do = []
 
-        backdoor = backdoor_criterion(
-            self.graph, exposure, outcome, do, self.unobserved
-        )
-        return print(msg + repr(backdoor))  # noqa: T201
+        self.dag.backdoor_criterion(exposure, outcome, do, self.unobserved)
 
     def conditional_independencies(
         self,
-        do: list[str] | None = None,
+        over: list[str] | None = None,
+        under: list[str] | None = None,
         ignore: list[str] | None = None,
-        show: Literal["testable", "untestable", "both"] = "testable",
+        show: CIOptions = "testable",
     ) -> None:
         """Display implied conditional independencies for this DAG.
 
         Args:
-            do (Optional): variables that are being intervened on.
+            over (Optional): remove edges pointing into these variables.
+            under (Optional): remove edges coming out of these variables.
             ignore (Optional): variables to omit from result.
             show (Optional): which conditional independencies to show.
                  One of 'testable', 'untestable' or 'both'. Defaults to 'testable'
@@ -249,49 +219,20 @@ class DAGSimulator:
         Returns:
             Nothing, but prints conditional independencies to the console.
         """
-        if do is not None:
-            # Sanity check for do variables
-            self._check_nodes(do)
-
-        if ignore is not None:
-            self._check_nodes(ignore)
-
-        cond = conditional_independencies(self.graph, do, ignore, self.unobserved)
-
-        msg = "The graph implies the following conditional independencies"
-
-        if do is not None:
-            str_do = [f"do({var})" for var in do]
-            msg += " under " + ",".join(str_do)
-
-        msg += ":\n"
-
-        match show:
-            case "testable":
-                print(msg + cond.render_testable)  # noqa: T201
-            case "untestable":
-                print(msg + cond.render_untestable)  # noqa: T201
-            case "both":
-                print(msg + repr(cond))  # noqa: T201
-
-    def mutilate(
-        self, over: list[str] | None = None, under: list[str] | None = None
-    ) -> nx.DiGraph:
-        """Mutilate the graph.
-
-        Args:
-            over: removes all arrows pointing into these nodes
-            under: removes all arrows pointing out of these nodes
-
-        Returns:
-            nx.DiGraph under mutilation
-
-        """
+        # Sanity check for input variables
         if over is not None:
             self._check_nodes(over)
         if under is not None:
             self._check_nodes(under)
-        return mutilate(self.graph, over, under)
+        if ignore is not None:
+            self._check_nodes(ignore)
+            ignore_ = set(ignore)
+        else:
+            ignore_ = set()
+
+        self.dag.conditional_independencies(
+            over, under, ignore_, self.unobserved, show
+        )
 
     def is_d_separator(
         self,
@@ -313,8 +254,10 @@ class DAGSimulator:
         Return:
             boolean indicating if z is a d-separator in the (mutilated) graph.
         """
-        graph = self.mutilate(over, under)
-        return nx.is_d_separator(graph, x, y, z)
+        x = {x} if not isinstance(x, set) else x
+        y = {y} if not isinstance(y, set) else y
+        z = {z} if not isinstance(z, set) else z
+        return self.dag.is_d_separator(x, y, z, over, under)
 
     def dagitty_code(
         self, over: list[str] | None = None, under: list[str] | None = None
@@ -329,21 +272,6 @@ class DAGSimulator:
             prints dagitty code string to console.
 
         """
-        graph = self.mutilate(over, under)
+        edges = self.dag.mutilate(over, under)
 
-        pos = calculate_node_positions(graph)
-
-        # determining bounding box
-        min_y = min(pos.select(pl.col("y").min()).item(), 0) - 0.05
-        max_y = max(pos.select(pl.col("y").max()).item(), 1) + 0.05
-        bounding_box = f'bb="-0.05,{min_y:.3f},1.05,{max_y:.3f}"'
-
-        def parse_node(row: dict[str, str | float]) -> str:
-            node = row["node"]
-            latent = "latent," if node in self.unobserved else ""
-            return f'{row["node"]} [{latent}pos="{row["x"]:.3f},{row["y"]:.3f}"]'
-
-        nodes = "\n".join(parse_node(row) for row in pos.to_dicts())
-        edges = "\n".join(f"{u} -> {v}" for (u, v) in graph.edges)
-
-        print(f"dag {{\n{bounding_box}\n{nodes}\n{edges}\n}}")  # noqa: T201
+        print(dagitty_code(edges, self.dag.topological_generations, self.unobserved))  # noqa: T201

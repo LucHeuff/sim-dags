@@ -1,8 +1,8 @@
 from collections import deque
 from collections.abc import Iterable, Sized
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import combinations, product
-from typing import Literal, Self
+from typing import Literal
 
 from more_itertools import sliding_window
 
@@ -11,7 +11,6 @@ from sim_dags.exceptions import (
     NoDisjointSetsError,
     NotADAGError,
 )
-from sim_dags.utils import all_combinations
 
 type Edge = tuple[str, str]
 type Edges = set[Edge]
@@ -20,106 +19,6 @@ type NodeMap = dict[Node, list[Node]]
 type NodeSequence = list[Node]
 
 type CIOptions = Literal["testable", "untestable", "both"]
-
-
-@dataclass(slots=True)
-class NodePaths:
-    """Container for undirected node paths."""
-
-    paths: list[NodeSequence] = field(default_factory=list)
-    complete: bool = False
-
-    def add_paths(self, paths: list[NodeSequence]) -> Self:
-        """Add paths."""
-        assert len(paths) > 0, "Don't add empty paths."
-        new_paths = [path for path in paths if path not in self.paths]
-        self.paths += new_paths
-        return self
-
-    def set_complete(self, complete: bool) -> Self:  # noqa: FBT001
-        """Set complete status."""
-        self.complete = complete
-        return self
-
-    @property
-    def is_complete(self) -> bool:
-        """Check if NodePaths is complete."""
-        return self.complete
-
-
-class PathMap:
-    """Provides a mapping of paths between two nodes."""
-
-    mapping: dict[Edge, NodePaths]
-
-    def __init__(self) -> None:
-        self.mapping = {}
-
-    @classmethod
-    def from_edges(cls, edges: Edges) -> Self:
-        """Construct a PathMapping from an initial list of edges."""
-        self = cls()
-        for u, v in edges:
-            self._add_paths(u, v, [[u, v]], complete=True)
-        return self
-
-    def _is_reversed(self, source: Node, target: Node) -> bool:
-        """Check if the mapping is reversed."""
-        return (target, source) in self.mapping
-
-    @staticmethod
-    def _reverse(paths: list[NodeSequence]) -> list[NodeSequence]:
-        """Reverse each path in a list of paths."""
-        return [path[::-1] for path in paths]
-
-    def _add_paths(
-        self,
-        source: Node,
-        target: Node,
-        paths: list[NodeSequence],
-        *,
-        complete: bool = False,
-    ) -> None:
-        """Add a NodePath to the PathMapping."""
-        self.mapping[(source, target)] = NodePaths(paths, complete)
-
-    def update_paths(
-        self,
-        source: Node,
-        target: Node,
-        paths: list[NodeSequence],
-        *,
-        complete: bool = False,
-    ) -> None:
-        """Update an existing path."""
-        if not self.has_path(source, target):  # add new path if it didn't exist yet
-            return self._add_paths(source, target, paths, complete=complete)
-
-        # adding reversed paths if original was stored in reverse order.
-        if self._is_reversed(source, target):
-            self.mapping[(target, source)].add_paths(
-                self._reverse(paths)
-            ).set_complete(complete)
-        else:
-            self.mapping[(source, target)].add_paths(paths).set_complete(complete)
-
-        return None
-
-    def has_path(self, source: Node, target: Node) -> bool:
-        """Check if the path from source to target appears in the mapping."""
-        return (source, target) in self.mapping or self._is_reversed(source, target)
-
-    def get_paths(self, source: Node, target: Node) -> list[NodeSequence]:
-        """Get NodePaths from source to target."""
-        if self._is_reversed(source, target):
-            return self._reverse(self.mapping[(target, source)].paths)
-        return self.mapping[(source, target)].paths
-
-    def path_is_complete(self, source: Node, target: Node) -> bool:
-        """Return whether the path is complete."""
-        if self._is_reversed(source, target):
-            return self.mapping[(target, source)].is_complete
-        return self.mapping[(source, target)].is_complete
 
 
 def edges_to_nodes(edges: Iterable[Edge]) -> set[Node]:
@@ -245,94 +144,75 @@ def get_topological_sortings(nodes: Sized[Node], edges: Edges) -> TopologicalSor
     return TopologicalSorting(topological_sort, topological_generations)
 
 
+def get_descendants(
+    edges: Edges, topological_generations: list[NodeSequence]
+) -> NodeMap:
+    """Create a mapping from every node to their descendants."""
+    desc = {}
+
+    def find_descendants(node: Node) -> set[Node]:
+        """Recursively retrieve nodes from descendants map."""
+        # if this node doesn't appear yet, find its children
+        children = desc.get(node, {v for u, v in edges if u == node})
+
+        return children | {
+            node for child in children for node in find_descendants(child)
+        }
+
+    # starting with reversed topological generations, since last generation
+    # doesnn't have any descendants
+    for i, layer in enumerate(topological_generations[::-1]):
+        if i == 0:
+            desc.update({node: set() for node in layer})
+        else:
+            for node in layer:
+                desc[node] = find_descendants(node)
+
+    return {node: sorted(d) for node, d in desc.items()}
+
+
+def get_reachable(neighbours: NodeMap) -> NodeMap:
+    """Create mapping from every node to every other node it can reach."""
+
+    def find_reachable(node: Node, seen: set[Node]) -> set[Node]:
+        """Recursively search across neighbours for reachable nodes."""
+        seen = seen | {node}
+        neigh = set(neighbours[node]) - seen
+        return neigh | {r for n in neigh for r in find_reachable(n, seen)}
+
+    return {node: sorted(find_reachable(node, set())) for node in neighbours}
+
+
 def all_simple_paths(
     source: Node,
     target: Node,
-    paths: PathMap,
     neighbours: NodeMap,
+    reachable: NodeMap,
 ) -> list[NodeSequence]:
     """Generate all simple paths from a list of edges."""
-    # keeping track of nodes already visited -> we're looking for simple paths
-    print(f"Looking for all paths between {source} and {target}")
 
-    def find_paths(start: Node, end: Node, visited: set[Node]) -> list[NodeSequence]:
-        """Find all paths between start and target."""
-        # making sure not to override visited in recursion
-        visited = visited.copy()
-        print(f"\nfind_paths({start}, {end}, {visited=})")
+    def find_paths(node: Node, path: NodeSequence) -> list[NodeSequence]:
+        """Recursively search along neighbours for a path to target."""
+        path = [*path, node]
 
-        # --- First checking if path exist in lookup table, avoiding retracing paths
-        if paths.has_path(start, end):
-            print("path already in PathMap")
-            # ignoring paths that go back on visited nodes
-            known_paths = [
-                path
-                for path in paths.get_paths(start, end)
-                if not bool(set(path) & visited)
-            ]
+        if node == target:
+            return [path]
 
-            # if we're sure these are all the paths, return immediately
-            if paths.path_is_complete(start, end):
-                return known_paths
-            # otherwise, add the unique nodes that we now traversed over this path
-            visited |= {node for path in known_paths for node in path}
-            found_paths = known_paths
-        else:
-            # haven't found anything yet, but need a list for later
-            print("path is unknown.")
-            found_paths = []
+        paths = []
+        for neighbour in neighbours[node]:
+            if neighbour in path:
+                continue
+            paths.extend(find_paths(neighbour, path))
 
-        # --- If there were no (complete) paths, step onto unvisited neighbours
-        start_neigh = set(neighbours[start]) - visited
-        end_neigh = set(neighbours[end]) - visited
+        return paths
 
-        print(f"Unvisited neighbours of {start}: {start_neigh}")
-        print(f"Unvisited neighbours of {end}: {end_neigh}")
+    # If the source and target cannot reach each other,
+    # then return the empty list immediately
+    if target not in reachable[source]:
+        return []
 
-        # --- If start and end have neighbours in common, this forms the path
-        common = set(start_neigh) & set(end_neigh)
-        if bool(common):
-            print(f"{start} and {end} have {common} in common")
-            common_paths = [[start, c, end] for c in common]
-            # Update the paths, but don't assume we've completed the list
-            paths.update_paths(start, end, common_paths)
-            found_paths += common_paths
-
-            print(f"{found_paths = }")
-
-            # if both sets of neighbours match, return the common paths
-            if start_neigh == common == end_neigh:
-                return found_paths
-
-            # either start_neigh or end_neigh might still be equal to common now.
-            # In that case I should use start or end respectively instead
-            start_neigh = {start} if not bool(s := start_neigh - common) else s
-            end_neigh = {end} if not bool(e := end_neigh - common) else e
-            visited |= common
-
-        # --- Search recursively over the remaining neighbours
-        print(f"Searching between pairs of {start_neigh = } and {end_neigh = }")
-        for s, t in product(sorted(start_neigh), sorted(end_neigh)):
-            new_paths = [
-                [start, *path, end]
-                for path in find_paths(s, t, visited | {start, end})
-                if len(path) > 0
-            ]
-            if len(new_paths) > 0:
-                # update the paths, but don't assume we've completed the list
-                paths.update_paths(start, target, new_paths)
-                found_paths += new_paths
-
-        print(f"Found the following paths between {start} and {end}:\n{found_paths}")
-        return found_paths
-
-    simple_paths = find_paths(source, target, set())
-
-    if len(simple_paths) > 0:
-        # Now that we've traversed the entire (sub)graph, paths are complete
-        paths.update_paths(source, target, simple_paths, complete=True)
-
-    return simple_paths
+    # Otherwise, search for unknown paths.
+    return find_paths(source, [])
 
 
 # --- Helper functions for finding d-separators.
@@ -350,44 +230,68 @@ def find_open_paths(edges: Edges, paths: list[NodeSequence]) -> list[NodeSequenc
     return [path for path in paths if not path_has_collider(path, edges)]
 
 
-def find_available_nodes(
-    edges: Edges, paths: list[NodeSequence], unobserved: set[Node]
-) -> set[Node]:
-    """Nodes are available when they are observed and not colliders."""
-    # finding all nodes that appear in paths
-    nodes = {node for path in paths for node in path}
-    # finding nodes that appear as a collider at least once
-    colliders = {
-        node
-        for node in nodes
-        if any(is_collider(node, path, edges) for path in paths)
-    }
-    return nodes - colliders - unobserved
+def find_colliders(edges: Edges, path: NodeSequence) -> set[Node]:
+    """Find colliders on a path."""
+    return {node for node in path if is_collider(node, path, edges)}
 
 
 def find_separators(
-    available: set[Node], paths: list[NodeSequence]
+    nodes: set[Node], edges: Edges, paths: list[NodeSequence], descendants: NodeMap
 ) -> list[NodeSequence]:
-    """Find d-separating sets: subset of available that appear in all paths."""
+    """Find d-separating sets: subsets of nodes that close all paths."""
+    # if there are no paths, return the empty set
     if not bool(paths):
         return [[]]
+
+    # if any of the paths is a direct edge, then there are no d-eseparators
+    if any(len(path) == 2 for path in paths):  # noqa: PLR2004
+        return []
+
+    # Storing a map of colliders for each path, so I only need to calculate once
+    collider_map = {tuple(path): find_colliders(edges, path) for path in paths}
+
     d_sep = []
-    for i in range(len(available)):
-        for c in combinations(available, i + 1):
+    # Finding a list of nodes that never appear as a collider on any path
+    # These can trivialy be added to a valid d-separating set, which speeds
+    # up the search a bit
+
+    def path_is_closed(
+        path: NodeSequence, z: set[Node], descendants: NodeMap
+    ) -> bool:
+        """Check if the path is closed."""
+        # From definition of d-separation, z closes the path if:
+        # 1 path contains at least one arrow emitting node that is in z
+        # OR
+        # 2 path contains at least one collision node that is outside z
+        #   and has no descendants in z
+        colliders_ = collider_map[tuple(path)]
+
+        # 1 -> at least one emitting node in z
+        emitting = set(path) - colliders_
+
+        if bool(z & emitting):
+            return True
+
+        # 2 -> at least one collider NOT in z AND no descendants of it in z
+        for c in colliders_:
+            if c not in z and not bool(set(descendants[c]) & z):
+                return True
+
+        # Otherwise, the path is open
+        return False
+
+    # iterating over all possible combinations of nodes
+    for i in range(len(nodes) + 1):
+        # i = 0 also tests the empty set
+        for c in combinations(nodes, i):
             z = set(c)
-            # if z already appears, skip it
-            if z in d_sep:
-                continue
-            # z is a d-separator if it appears in all paths.
-            closed = [path for path in paths if set(path) & z]
-            if len(closed) == len(paths):
-                d_sep.append(z)
-                # if z is a d-separator, then any combination of z and the
-                # other available nodes is also a d-separator
-                d_sep.extend(z | c_ for c_ in all_combinations(available - z))
+            # Can skip this combination if it already appears in d-separators
+
+            if all(path_is_closed(path, z, descendants) for path in paths):
+                d_sep.append(sorted(z))
 
     # converting sets to sorted lists for more consistent output
-    return [sorted(z) for z in d_sep]
+    return d_sep
 
 
 def find_minimal_separators(d_sep: list[NodeSequence]) -> list[NodeSequence]:
@@ -410,8 +314,9 @@ def is_d_separator(
     y: set[Node],
     z: set[Node],
     edges: Edges,
-    paths: PathMap,
     neighbours: NodeMap,
+    descendants: NodeMap,
+    reachable: NodeMap,
 ) -> bool:
     """Check if z d-separates x and y.
 
@@ -439,37 +344,25 @@ def is_d_separator(
     if any(pair in edges or pair[::-1] in edges for pair in pairs):
         return False
 
-    # Finding all paths between nodes in X and nodes in Y,
-    # if path wasn't pruned away by mutilation
-    all_paths = [
-        path
-        for (x_, y_) in pairs
-        for path in all_simple_paths(x_, y_, paths, neighbours)
-        if undirected_path_exists(path, edges)
-    ]
+    # Evaluating if Z d-separates for every pair
+    for u, v in pairs:
+        paths = [
+            path
+            for path in all_simple_paths(u, v, neighbours, reachable)
+            if undirected_path_exists(path, edges)
+        ]
+        # If there are no paths between these two nodes, then any Z is a d-separator
+        if len(paths) == 0:
+            continue
 
-    # if there are no paths between X and Y, then Z (trivially) is a d-separator.
-    if not bool(all_paths):
-        return True
+        available = {node for path in paths for node in path if node not in x | y}
 
-    # available nodes are all nodes that appear in paths that are not in X or Y
-    # in other words, these are the potential d-separators.
-    available = {node for path in all_paths for node in path if node not in x | y}
+        # z must appear as one of the d-separators of every pair,
+        # so if any of them doesn't the result can be returned immediately.
+        if sorted(z) not in find_separators(available, edges, paths, descendants):
+            return False
 
-    # If no Z nodes appear in the available nodes, the Z cannot be a d-separator.
-    if not (available & z):
-        return False
-
-    # If any variable Z is a collider on any of the paths, then Z cannot a d-separate
-    if any(is_collider(z_, path, edges) for path in all_paths for z_ in z):
-        return False
-
-    # Z is a d-separator if it appears in the separators
-    # for all pairs of path between X and Y.
-    return all(
-        sorted(z) in find_separators(available, paths.get_paths(*pair))
-        for pair in pairs
-    )
+    return True
 
 
 # --- Backdoor criterion
@@ -481,6 +374,7 @@ class BackdoorCriterion:
     backdoor_paths: list[NodeSequence] | None = None
     open_paths: list[NodeSequence] | None = None
     adjustment_sets: list[NodeSequence] | None = None
+    minimal_adjustment_sets: list[NodeSequence] | None = None
 
     def render_path(self, path: NodeSequence) -> str:
         """Convert path into readable format, referring to the DAG."""
@@ -494,6 +388,11 @@ class BackdoorCriterion:
 
         return r.strip()
 
+    def render_set(self, adjustment_sets: list[NodeSequence]) -> str:
+        """Render a list of adjustment sets into a legigble format."""
+        adj = [f"{{{', '.join(set_)}}}" for set_ in adjustment_sets]
+        return "\n  ".join(adj)
+
     def __repr__(self) -> str:
         """Legible string with backdoor criterion output."""
         if self.backdoor_paths is None:
@@ -505,11 +404,14 @@ class BackdoorCriterion:
         rendered_open = [self.render_path(path) for path in self.open_paths]
         msg = f"Found {len(self.open_paths)} open paths:\n  {'\n  '.join(rendered_open)}\n"  # noqa: E501
 
-        if self.adjustment_sets is None:
+        if self.adjustment_sets is None or self.minimal_adjustment_sets is None:
             msg += "No adjustment sets found."
         else:
-            adj = [f"{{{', '.join(set_)}}}" for set_ in self.adjustment_sets]
-            msg += f"Available adjustment sets:\n  {'\n  '.join(adj)}"
+            min_adj = self.render_set(self.minimal_adjustment_sets)
+            msg += f"Minimal adjustment sets: \n  {min_adj}"
+            if len(self.adjustment_sets) > len(self.minimal_adjustment_sets):
+                adj = self.render_set(self.adjustment_sets)
+                msg += f"\nAll available adjustment sets:\n  {adj}"
 
         return msg
 
@@ -520,9 +422,9 @@ def backdoor_criterion(
     edges: set[Edge],
     simple_paths: list[NodeSequence],
     unobserved: set[Node],
+    descendants: NodeMap,
 ) -> BackdoorCriterion:
     """Perform backdoor criterion for a given list of paths."""
-    unobserved |= {exposure, outcome}
     # Finding existing paths based on edges.
     # These might be different from simple_paths due to mutilation.
 
@@ -542,21 +444,29 @@ def backdoor_criterion(
     if not bool(open_paths):
         return BackdoorCriterion(edges, backdoor_paths)
 
-    # --- Finding adjustment sets. Candidates are observed non-colliders.
-    # the exposure and outcome themselves are should also be ignored.
-    available = find_available_nodes(
-        edges, backdoor_paths, unobserved | {exposure, outcome}
-    )
+    # --- Finding adjustment sets.
+    # Candidates are observed nodes that are not the exposure or the outcome.
+
+    available = {
+        node
+        for path in backdoor_paths
+        for node in path
+        if node not in unobserved | {exposure, outcome}
+    }
 
     # adjustment sets consist of combinations of nodes that close all open paths
-    adjustment_sets = find_separators(available, open_paths)
+    adjustment_sets = find_separators(available, edges, backdoor_paths, descendants)
 
     # if no adjustment sets were found, return backdoor and open paths
     if not bool(adjustment_sets):
         return BackdoorCriterion(edges, backdoor_paths, open_paths)
 
+    minimal_adjustment_sets = find_minimal_separators(adjustment_sets)
+
     # otherwise, return everything
-    return BackdoorCriterion(edges, backdoor_paths, open_paths, adjustment_sets)
+    return BackdoorCriterion(
+        edges, backdoor_paths, open_paths, adjustment_sets, minimal_adjustment_sets
+    )
 
 
 # --- Conditional independencies
@@ -570,9 +480,9 @@ class ConditionalIndependecies:
     def render_list(self, list_: list[str], title: str, do_msg: str) -> str:
         """Render a list into a string."""
         if len(list_) == 0:
-            return f"No {title} conditional independencies {do_msg}."
+            return f"No {title} conditional independencies{do_msg}."
         return (
-            f"{title.capitalize()} independencies {do_msg}:\n {'\n  '.join(list_)}"
+            f"{title.capitalize()} independencies{do_msg}:\n  {'\n  '.join(list_)}"
         )
 
     def render_testable(self, do_msg: str) -> str:
@@ -587,25 +497,24 @@ class ConditionalIndependecies:
         """Render all conditional independencies."""
         if len(self.testable) == 0 and len(self.untestable) == 0:
             return (
-                f"The graph does not imply any conditional independencies {do_msg}."
+                f"The graph does not imply any conditional independencies{do_msg}."
             )
         return f"{self.render_testable(do_msg)}\n{self.render_untestable(do_msg)}"
 
 
 def conditional_independencies(
-    nodes: set[Node],
+    topological_sort: NodeSequence,
     edges: Edges,
     ignore: set[Node],
     unobserved: set[Node],
-    paths: PathMap,
     neighbours: NodeMap,
+    descendants: NodeMap,
+    reachable: NodeMap,
     *,
     testable_only: bool,
 ) -> ConditionalIndependecies:
     """Find all conditional independencies implied by this graph."""
     # Depending on the show option, not all nodes are relevant
-    relevant = nodes - ignore - unobserved if testable_only else nodes - ignore
-
     testable = []
     untestable = []
 
@@ -619,6 +528,7 @@ def conditional_independencies(
     def r(left: str, right: str, d_sep: list[str]) -> str:
         if not bool(d_sep):
             return cond(left, right)
+
         return f"{cond(left, right)} | {','.join(list(map(u, d_sep)))}"
 
     def update(left: str, right: str, d_sep: list[str]) -> None:
@@ -627,11 +537,16 @@ def conditional_independencies(
         else:
             testable.append(r(left, right, d_sep))
 
+    nodes = set(topological_sort)
+    relevant = nodes - ignore - unobserved if testable_only else nodes - ignore
+
     # isolated nodes are always independent of any other node.
     # nodes may have become isolated after mutilation
     isolated = nodes - edges_to_nodes(edges)
 
-    for left, right in combinations(sorted(relevant), 2):
+    order = [node for node in topological_sort if node in relevant]
+
+    for left, right in combinations(order, 2):
         # skipping if the nodes are direct neighbours
         if left in neighbours[right]:
             continue
@@ -641,16 +556,26 @@ def conditional_independencies(
             continue
 
         # figuring out d-separators for this pair
-        simple_paths = all_simple_paths(left, right, paths, neighbours)
+        simple_paths = all_simple_paths(left, right, neighbours, reachable)
         existing_paths = find_existing_paths(edges, simple_paths)
-        open_paths = find_open_paths(edges, existing_paths)
-        available = find_available_nodes(edges, open_paths, {left, right})
-        d_separators = find_minimal_separators(
-            find_separators(available, open_paths)
-        )
+        available = {
+            node
+            for path in existing_paths
+            for node in path
+            if node not in {left, right}
+        }
+        # When only looking at testable independencies, can remove unobserved
+        # from available.
+        # This can speed up find_separators as it has to check fewer combinations
+        if testable_only:
+            available -= unobserved
+
+        d_separators = find_separators(available, edges, existing_paths, descendants)
+        minimal_d_separators = find_minimal_separators(d_separators)
+
         # skipping if d_separators is the empty list -> no conditional independencies
-        if bool(d_separators):
-            for d_sep in sorted(d_separators):
+        if bool(minimal_d_separators):
+            for d_sep in sorted(minimal_d_separators):
                 update(left, right, sorted(d_sep))
 
     return ConditionalIndependecies(testable, untestable)
@@ -665,7 +590,7 @@ class DirectedAcyclicGraph:
     topological_generations: list[NodeSequence]
     parents: NodeMap
     _neighbours: NodeMap
-    _paths: PathMap
+    _reachable: NodeMap
 
     def __init__(
         self,
@@ -689,8 +614,8 @@ class DirectedAcyclicGraph:
         # Storing often used properties of the DAG in lieu of caching
         self.parents = get_parents(self.nodes, self.edges)
         self._neighbours = get_neighbours(self.topological_sort, self.edges)
+        self._reachable = get_reachable(self._neighbours)
         # Setting up paths, starting with the known edges
-        self._paths = PathMap.from_edges(self.edges)
 
     def mutilate(
         self, over: NodeSequence | None, under: NodeSequence | None
@@ -705,7 +630,7 @@ class DirectedAcyclicGraph:
 
     def _parse_do(self, do: NodeSequence | None) -> str:
         """Create added message for interventions."""
-        return "" if do is None else "under " + ", ".join(f"do({n})" for n in do)
+        return "" if do is None else " under " + ", ".join(f"do({n})" for n in do)
 
     def backdoor_criterion(
         self,
@@ -717,7 +642,9 @@ class DirectedAcyclicGraph:
         """Display adjustment sets for exposure -> outcome."""
         edges = self.mutilate(over=do, under=None)
         # Finding all paths in the base DAG.
-        paths = all_simple_paths(exposure, outcome, self._paths, self._neighbours)
+        paths = all_simple_paths(
+            exposure, outcome, self._neighbours, self._reachable
+        )
 
         do_msg = self._parse_do(do)
         if do is not None:
@@ -735,7 +662,11 @@ class DirectedAcyclicGraph:
         # Adding the interventions
         msg = f"Causal effect of {exposure} -> {outcome} {do_msg}:\n"
 
-        backdoor = backdoor_criterion(exposure, outcome, edges, paths, unobserved)
+        descendants = get_descendants(edges, self.topological_generations)
+
+        backdoor = backdoor_criterion(
+            exposure, outcome, edges, paths, unobserved, descendants
+        )
         return print(msg + repr(backdoor))  # noqa: T201
 
     def conditional_independencies(
@@ -749,13 +680,15 @@ class DirectedAcyclicGraph:
         """Display conditional independencies."""
         edges = self.mutilate(over, under)
         testable_only = show == "testable"
+        descendants = get_descendants(edges, self.topological_generations)
         ci = conditional_independencies(
-            self.nodes,
+            self.topological_sort,
             edges,
             ignore,
             unobserved,
-            self._paths,
             self._neighbours,
+            descendants,
+            self._reachable,
             testable_only=testable_only,
         )
 
@@ -779,4 +712,13 @@ class DirectedAcyclicGraph:
     ) -> bool:
         """Check if Z d-separates X and Y, optionally under mutilation."""
         edges = self.mutilate(over, under)
-        return is_d_separator(x, y, z, edges, self._paths, self._neighbours)
+        descendants = get_descendants(edges, self.topological_generations)
+        return is_d_separator(
+            x,
+            y,
+            z,
+            edges,
+            self._neighbours,
+            descendants,
+            self._reachable,
+        )

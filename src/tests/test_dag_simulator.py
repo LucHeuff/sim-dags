@@ -10,7 +10,7 @@ from sim_dags.example_generators import (
 from sim_dags.exceptions import (
     DuplicateVariableError,
     InvalidDoValueError,
-    MissingDistributionError,
+    MissingNodeError,
     UnknownDistributionError,
     UnknownDoVariableError,
     VariableNotInDAGError,
@@ -107,7 +107,7 @@ def test_conditional_indepencencies(complex_model_simulator: DAGSimulator) -> No
         [Binomial("x"), Binomial("z", ["x"], unobserved=True), Binomial("y", ["z"])]
     )
     pipe_unobs_model.conditional_independencies()
-    pipe_unobs_model.conditional_independencies(do=["x"])
+    pipe_unobs_model.conditional_independencies(over=["x"])
     complete_model = DAGSimulator(
         [Binomial("x"), Binomial("z", ["x"]), Binomial("y", ["z", "x"])]
     )
@@ -115,23 +115,10 @@ def test_conditional_indepencencies(complex_model_simulator: DAGSimulator) -> No
 
     complex_model_simulator.conditional_independencies()
     complex_model_simulator.conditional_independencies(ignore=["z"])
+    complex_model_simulator.conditional_independencies(under=["z"])
 
     complex_model_simulator.conditional_independencies(show="untestable")
     complex_model_simulator.conditional_independencies(show="both")
-
-
-def test_mutilate(simulator: DAGSimulator) -> None:
-    """Test mutilate."""
-    no_change = simulator.mutilate()
-
-    assert simulator.graph.nodes == no_change.nodes, "graph shouldn't change"
-    assert simulator.graph.edges == no_change.edges, "graph shouldn't change"
-
-    over_x = simulator.mutilate(over=["x"])
-    assert ("u1", "x") not in over_x.edges, "incorrect edge"
-
-    under_y = simulator.mutilate(under=["y"])
-    assert ("y", "w") not in under_y.edges, "incorrect edge"
 
 
 def test_is_d_separator(simulator: DAGSimulator) -> None:
@@ -170,7 +157,7 @@ def test_conditional_indepencencies_raises_missing_variable(
 ) -> None:
     """Test if DAGSimulator.conditional_independencies() raises VariableNotInDAGError."""  # noqa: E501
     with pytest.raises(VariableNotInDAGError):
-        simulator.conditional_independencies(do=["t", "u"])
+        simulator.conditional_independencies(over=["t", "u"])
 
 
 def test_fix_seeds() -> None:
@@ -223,10 +210,10 @@ def test_dag_simulator_raises_unknown_distribution() -> None:
         DAGSimulator(dists)
 
 
-def test_dag_simulator_raises_missing_distribution() -> None:
+def test_dag_simulator_raises_missing_node() -> None:
     """Test if DAGSimulator raises MissingDistributionError."""
     dists = [Categorical("x", 4), Binomial("y", ["x", "z"])]
-    with pytest.raises(MissingDistributionError):
+    with pytest.raises(MissingNodeError):
         DAGSimulator(dists)
 
 
