@@ -244,7 +244,6 @@ def _p_dist(
     return data.rename({"density": q.name}).sort(q.variables)
 
 
-# TODO test!
 def p_distribution(
     data: pl.DataFrame,
     query: str,
