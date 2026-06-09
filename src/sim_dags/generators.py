@@ -125,7 +125,7 @@ class CategoricalGenerator(Generator):
         self,
         variable: Categorical,
         parents: list[Distribution],
-        alpha: int,
+        alpha: float,
         rng: np.random.Generator,
     ) -> None:
         """Set parameters for this generator."""

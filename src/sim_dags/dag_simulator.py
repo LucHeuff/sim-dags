@@ -54,7 +54,7 @@ class DAGSimulator:
     def __init__(
         self,
         distributions: Sequence[Distribution],
-        alpha: int = 2,
+        alpha: float = 1,
         seed: int = 12345,
     ) -> None:
         """Parse the generators into a DAG.
