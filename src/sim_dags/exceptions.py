@@ -14,18 +14,6 @@ class VariableNotBinomialError(SimDAGError):
     """Raised when the variable doesn't seem to be Binomial."""
 
 
-class InvalidPriorShapeError(SimDAGError):
-    """Raised when the provided prior has an incorrect shape."""
-
-
-class InvalidPriorDistributionError(SimDAGError):
-    """Raised when the provided prior has an invalid distribution."""
-
-
-class InvalidGridStepsError(SimDAGError):
-    """Raised when trying to set grid steps to an invalid value."""
-
-
 class IllegalColumnNameError(SimDAGError):
     """Raised when a column name is used that is also used internally."""
 
