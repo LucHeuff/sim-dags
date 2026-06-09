@@ -2,13 +2,16 @@ from dataclasses import dataclass
 from functools import partial
 
 import hypothesis.strategies as st
+import numpy as np
 import polars as pl
 import pytest
 from hypothesis import given
+from numpy.testing import assert_almost_equal
 from polars.testing import assert_frame_equal
 from sim_dags.exceptions import (
     IllegalColumnNameError,
     VariableDoesNotExistError,
+    VariableNotBinomialError,
 )
 from sim_dags.probability import (
     ILLEGAL_NAMES,
@@ -18,6 +21,7 @@ from sim_dags.probability import (
     _permutations,
     p,
     p_array,
+    p_distribution,
 )
 from sim_dags.utils import to_df
 
@@ -226,3 +230,72 @@ def test_p_array(static_strategy: ProbabilityStrategy) -> None:
     assert_equal(get_p("z|x,w"), s.pz_xw)
     assert_equal(get_p("y|z,x,w"), s.py_zxw)
     assert_equal(get_p("y,x|z,w"), s.pyx_zw)
+
+
+@dataclass
+class DensityStrategy:
+    """Container for density strategy."""
+
+    data: pl.DataFrame
+    py_x: pl.DataFrame
+    py_xz: pl.DataFrame
+
+
+@pytest.fixture
+def density_strategy() -> DensityStrategy:
+    """Container for testing p_distribution."""
+    data = pl.DataFrame(
+        {
+            "y": [0, 0, 1, 1, 1, 1, 0, 0],
+            "x": ["a", "a", "b", "b", "a", "a", "b", "b"],
+            "z": ["x", "x", "x", "x", "y", "y", "y", "y"],
+            "w": ["w", "w", "w", "z", "z", "z", "w", "z"],
+        }
+    )
+
+    py_x = pl.DataFrame({"p": [0.5, 0.5], "y": [1, 1], "x": ["a", "b"]})
+    py_xz = pl.DataFrame(
+        {
+            "p": [0.0, 0.92, 1.0, 1.0, 1.0, 0.0, 0.92, 1.0],
+            "y": [1] * 8,
+            "x": ["a"] * 4 + ["b"] * 4,
+            "z": ["x", "x", "x", "y", "x", "y", "y", "y"],
+        }
+    )
+
+    return DensityStrategy(data, py_x, py_xz)
+
+
+def test_p_distribution_raises(density_strategy: DensityStrategy) -> None:
+    """Test if p_distribution raises the correct errors."""
+    with pytest.raises(VariableNotBinomialError):
+        p_distribution(density_strategy.data, "x")
+
+
+def test_p_distribution(density_strategy: DensityStrategy) -> None:
+    """Test p_distribution()."""
+    s = density_strategy
+
+    # checking if
+    py = p_distribution(s.data, "y")
+    py_prior = p_distribution(s.data, "y", prior=np.repeat(1, 100))
+
+    assert_almost_equal(
+        py["P(y)"].to_numpy(),
+        py_prior["P(y)"].to_numpy(),
+        err_msg="Distributions should be almost equal",
+    )
+
+    def get_p(query: str) -> pl.DataFrame:
+        q = _parse_query(s.data, query, None)
+        return (
+            p_distribution(s.data, query, steps=101)
+            .with_columns(c=(pl.col(q.name) == pl.col(q.name).max()).over(q.given))
+            .filter(pl.col("c"))
+            .select(pl.exclude([q.name, "c"]))
+        )
+
+    assert_equal = partial(assert_frame_equal, check_row_order=False)
+
+    assert_equal(get_p("y|x"), s.py_x)
+    assert_equal(get_p("y|x,z"), s.py_xz)

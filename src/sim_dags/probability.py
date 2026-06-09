@@ -1,13 +1,16 @@
 from dataclasses import dataclass
 from itertools import product
 
+import numpy as np
 import polars as pl
 import xarray as xr
 from numpy.testing import assert_allclose, assert_almost_equal
+from scipy import stats
 
 from sim_dags.exceptions import (
     IllegalColumnNameError,
     VariableDoesNotExistError,
+    VariableNotBinomialError,
 )
 
 ILLEGAL_NAMES = {"_k", "_n", "_p"}
@@ -128,7 +131,7 @@ def p(
     Args:
         data: dataset from which probability is to be calculated
         query: desired probability, eg. "Y|X, Z"
-        name: desired name of probability column. Defaults to P(<query>).
+        name (Optional): desired name of probability column. Defaults to P(<query>).
         include_zeros (Optional): whether combination that do not appear in
                       data should also be included
 
@@ -150,7 +153,7 @@ def p_array(data: pl.DataFrame, query: str, name: str | None = None) -> xr.DataA
     Args:
         data: dataset from which probability is to be calculated
         query: desired probability, eg. "Y|X, Z"
-        name: desired name of probability column. Defaults to P(<query>).
+        name (Optional): desired name of probability column. Defaults to P(<query>).
 
     Returns:
         polars DataFrame containing probabilities
@@ -160,8 +163,114 @@ def p_array(data: pl.DataFrame, query: str, name: str | None = None) -> xr.DataA
 
     """
     q = _parse_query(data, query, name)
+    p_ = _p(data, q, include_zeros=True)
     # Conversion using pandas,
     # since that makes sure the values end up in the right place
-    p_ = _p(data, q, include_zeros=True)
     # Also my first successful application of a MultiIndex
     return p_.to_pandas().set_index(q.variables).to_xarray()[q.name]
+
+
+# ---- calculating probability distributions using beta or grid approximation
+
+
+def _p_dist(
+    data: pl.DataFrame, q: QueryParts, steps: int, prior: np.ndarray | None
+) -> pl.DataFrame:
+    """Calculate probability distribution from a query."""
+    # This distribution only makes sense if event is a single variable
+    assert len(q.event) == 1, (
+        f"Probability distribution doesn't make sense for joint distributions; got event={q.event}"  # noqa: E501
+    )
+    e = q.event[0]
+
+    df = _count(data, q)
+    # Sanity check for variable names
+    assert len(df.filter(df.is_duplicated())) == 0, (
+        "Counts contain duplicates. This usually happens due to column name collisions."  # noqa: E501
+    )
+    # Making sure there are no duplicates in the dataframe after counting
+    if not (df.schema[e] == pl.Int64 and df.select(pl.col(e).max()).item() == 1):
+        msg = f"Variable '{e}' doesn't seem to be Binomial"
+        raise VariableNotBinomialError(msg)
+
+    # Removing the e = 0 condition, this is simply the opposite of e = 1
+    df = df.filter(pl.col(e) == 1)
+
+    # Finding all permutations
+    df = (
+        _permutations(df, q)
+        .join(df, on=q.variables, how="left")
+        .with_columns(pl.col(["_k", "_n"]).fill_null(0))
+    )
+
+    def get_dist(k: int, n: int) -> dict[str, np.ndarray]:
+        grid_length = len(prior) if prior is not None else steps
+        p = np.linspace(0, 1, grid_length)
+
+        if prior is None:
+            return {"p": p, "density": stats.beta.pdf(p, k + 1, n - k + 1)}
+        bayes = stats.binom.pmf(k, n, p) * prior
+        return {"p": p, "density": bayes / np.trapezoid(bayes, p)}
+
+    dists = []
+    for d in df.to_dicts():
+        k = d.pop("_k")
+        n = d.pop("_n")
+        _df = pl.DataFrame(get_dist(k, n)).join(pl.DataFrame(d), how="cross")
+        dists.append(_df)
+
+    data = pl.concat(dists)
+
+    # Sanity checking that density should add up to (almost) one for all groups
+    if q.given is None:
+        _sum = np.trapezoid(data["density"].to_numpy(), data["p"].to_numpy())
+        assert_allclose(
+            _sum, 1, rtol=1e-3, err_msg="Probability density does not interate to 1."
+        )
+    else:
+        _sum = np.asarray(
+            [
+                np.trapezoid(d["density"].to_numpy(), d["p"].to_numpy())
+                for _, d in data.group_by(q.given)
+            ]
+        )
+        assert_allclose(
+            _sum,
+            1,
+            rtol=1e-3,
+            err_msg="Probability densities do not integrate to 1.",
+        )
+
+    return data.rename({"density": q.name}).sort(q.variables)
+
+
+# TODO test!
+def p_distribution(
+    data: pl.DataFrame,
+    query: str,
+    name: str | None = None,
+    steps: int = 100,
+    prior: np.ndarray | None = None,
+) -> pl.DataFrame:
+    """Calculate probability distribution based on a query.
+
+    Args:
+        data: dataset from which probability is to be calculated
+        query: desired probability, eg. "Y|X, Z".
+               Note that joint distributions for given are not allowed!
+        name (Optional): desired name of probability column. Defaults to P(<query>).
+        steps (Optional): Number of grid steps in distribution.
+                          Ignored if prior is set.
+        prior (Optional): prior distribution to use in Bayes formula.
+                          Defaults to flat prior.
+
+    Returns:
+        polars DataFrame containing probability distributions
+
+    Raises:
+        VariableDoesNotExistError if a variable does not appear in the data.
+        VariableNotBinomialError if the event is not Binomial
+
+    """
+    q = _parse_query(data, query, name)
+    return _p_dist(data, q, steps, prior)

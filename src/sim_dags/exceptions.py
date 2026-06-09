@@ -10,6 +10,10 @@ class VariableNotInDAGError(SimDAGError):
     """Raised when a variable does not appear in the DAG."""
 
 
+class VariableNotBinomialError(SimDAGError):
+    """Raised when the variable doesn't seem to be Binomial."""
+
+
 class InvalidPriorShapeError(SimDAGError):
     """Raised when the provided prior has an incorrect shape."""
 
