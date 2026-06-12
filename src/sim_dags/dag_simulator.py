@@ -251,13 +251,37 @@ class DAGSimulator:
             over (Optional): all arrows pointing into these nodes are removed
             under (Optional): all arrows pointing out of these nodes are removed
 
-        Return:
+        Returns:
             boolean indicating if z is a d-separator in the (mutilated) graph.
         """
         x = {x} if not isinstance(x, set) else x
         y = {y} if not isinstance(y, set) else y
         z = {z} if not isinstance(z, set) else z
         return self.dag.is_d_separator(x, y, z, over, under)
+
+    def find_d_separators(
+        self,
+        x: str | set[str],
+        y: str | set[str],
+        over: list[str] | None = None,
+        under: list[str] | None = None,
+    ) -> None:
+        """Find sets that d-separate x and y.
+
+        Args:
+            x: node or set of nodes
+            y: node or set of nodes
+            over (Optional): all arrows pointing into these nodes are removed
+            under (Optional): all arrows pointing out of these nodes are removed
+
+        Returns:
+            nothing, but prints d-separating sets if any exist.
+
+        """
+        x = {x} if not isinstance(x, set) else x
+        y = {y} if not isinstance(y, set) else y
+
+        self.dag.find_d_separators(x, y, self.unobserved, over, under)
 
     def dagitty_code(
         self, over: list[str] | None = None, under: list[str] | None = None

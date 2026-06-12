@@ -1,10 +1,12 @@
 from collections import deque
 from collections.abc import Iterable, Sized
 from dataclasses import dataclass
+from functools import reduce
 from itertools import combinations, product
 from typing import Literal
 
 from more_itertools import sliding_window
+from networkx import find_minimal_d_separator
 
 from sim_dags.exceptions import (
     MissingNodeError,
@@ -235,8 +237,45 @@ def find_colliders(edges: Edges, path: NodeSequence) -> set[Node]:
     return {node for node in path if is_collider(node, path, edges)}
 
 
+def path_is_closed(
+    path: NodeSequence,
+    z: set[Node],
+    colliders: set[Node],
+    descendants: NodeMap,
+) -> bool:
+    """Check if the path is closed by Z.
+
+    A path is closed (or equivalently, Z is a d-separator) if:
+    - path contains at least one arrow emitting node that is in Z
+    OR
+    - path contains a collider that is not in Z and doesn't have any descendants in Z
+
+    Args:
+        path: a sequence of nodes forming a valid path
+        z: Z set to be tested for d-separation
+        colliders: set of colliders on this path
+        descendants: mapping of nodes to their descendants
+
+    Returns:
+        boolean whether the path is closed
+
+    """
+    emitting_nodes = set(path) - colliders
+
+    # Checking the first condition: arrow emitting node in Z
+    if z & emitting_nodes:
+        return True
+
+    # Checking the second condition:
+    # any collider that isn't in z and also doesn't have descendants in z
+    return any((c not in z and not z & set(descendants[c])) for c in colliders)
+
+
 def find_separators(
-    nodes: set[Node], edges: Edges, paths: list[NodeSequence], descendants: NodeMap
+    available: set[Node],
+    edges: Edges,
+    paths: list[NodeSequence],
+    descendants: NodeMap,
 ) -> list[NodeSequence]:
     """Find d-separating sets: subsets of nodes that close all paths."""
     # if there are no paths, return the empty set
@@ -255,39 +294,16 @@ def find_separators(
     # These can trivialy be added to a valid d-separating set, which speeds
     # up the search a bit
 
-    def path_is_closed(
-        path: NodeSequence, z: set[Node], descendants: NodeMap
-    ) -> bool:
-        """Check if the path is closed."""
-        # From definition of d-separation, z closes the path if:
-        # 1 path contains at least one arrow emitting node that is in z
-        # OR
-        # 2 path contains at least one collision node that is outside z
-        #   and has no descendants in z
-        colliders_ = collider_map[tuple(path)]
-
-        # 1 -> at least one emitting node in z
-        emitting = set(path) - colliders_
-
-        if bool(z & emitting):
-            return True
-
-        # 2 -> at least one collider NOT in z AND no descendants of it in z
-        for c in colliders_:
-            if c not in z and not bool(set(descendants[c]) & z):
-                return True
-
-        # Otherwise, the path is open
-        return False
-
     # iterating over all possible combinations of nodes
-    for i in range(len(nodes) + 1):
+    for i in range(len(available) + 1):
         # i = 0 also tests the empty set
-        for c in combinations(nodes, i):
+        for c in combinations(available, i):
             z = set(c)
             # Can skip this combination if it already appears in d-separators
-
-            if all(path_is_closed(path, z, descendants) for path in paths):
+            if all(
+                path_is_closed(path, z, collider_map[tuple(path)], descendants)
+                for path in paths
+            ):
                 d_sep.append(sorted(z))
 
     # converting sets to sorted lists for more consistent output
@@ -355,14 +371,88 @@ def is_d_separator(
         if len(paths) == 0:
             continue
 
-        available = {node for path in paths for node in path if node not in x | y}
-
-        # z must appear as one of the d-separators of every pair,
-        # so if any of them doesn't the result can be returned immediately.
-        if sorted(z) not in find_separators(available, edges, paths, descendants):
+        if not all(
+            path_is_closed(path, z, find_colliders(edges, path), descendants)
+            for path in paths
+        ):
             return False
 
     return True
+
+
+@dataclass(slots=True, frozen=True)
+class DSeparators:
+    """Container for d-separators."""
+
+    minimal: list[NodeSequence]
+    separators: list[NodeSequence]
+
+    def render_set(self, s: NodeSequence) -> str:
+        """Render a separating set."""
+        return f"{{{', '.join(s)}}}"
+
+    def render_sets(self, s: list[NodeSequence]) -> str:
+        """Render a list of sets."""
+        return "\n\t" + f"{'\n\t'.join(self.render_set(s_) for s_ in s)}"
+
+    def __repr__(self) -> str:
+        """List d-separators, if any."""
+        if len(self.minimal) == 0:
+            return "No d-separating sets found."
+        if len(self.minimal) == len(self.separators):
+            return "D-separating sets:" + self.render_sets(self.minimal)
+        min_ = "Minimal d-separating sets:" + self.render_sets(self.minimal)
+        all_ = "All d-separating sets:" + self.render_sets(self.separators)
+
+        return f"D-separating sets:\n{min_}\n{all_}"
+
+
+def find_d_separators(
+    x: set[Node],
+    y: set[Node],
+    edges: Edges,
+    neighbours: NodeMap,
+    descendants: NodeMap,
+    reachable: NodeMap,
+    unobserved: set[Node],
+) -> DSeparators:
+    """Find d-separating sets between X and Y."""
+    if bool(x & y):
+        msg = "X and Y are not disjoint."
+        raise NoDisjointSetsError(msg)
+
+    pairs = list(product(x, y))
+
+    # If any of the pairs appears in the edges, then no d-separators are possible
+    if any(pair in edges for pair in pairs):
+        return DSeparators([], [])
+
+    # keeping a list of set of d-separating sets.
+    all_separators = []
+
+    for u, v in pairs:
+        all_paths = all_simple_paths(u, v, neighbours, reachable)
+        paths = find_existing_paths(edges, all_paths)
+        available = {
+            node
+            for path in paths
+            for node in path
+            if node not in unobserved | {u, v}
+        }
+        separators = {
+            tuple(sep)
+            for sep in find_separators(available, edges, paths, descendants)
+        }
+        all_separators.append(separators)
+
+    # We now have a list of sets of d-separators for each pair
+    # Now we need to find out which d-separators all of these sets have in common.
+
+    d_sep = [list(sep) for sep in reduce(lambda u, v: u & v, all_separators)]
+
+    minimal = find_minimal_separators(d_sep)
+
+    return DSeparators(minimal, d_sep)
 
 
 # --- Backdoor criterion
@@ -722,3 +812,19 @@ class DirectedAcyclicGraph:
             descendants,
             self._reachable,
         )
+
+    def find_d_separators(
+        self,
+        x: set[Node],
+        y: set[Node],
+        unobserved: set[Node],
+        over: NodeSequence | None,
+        under: NodeSequence | None,
+    ) -> None:
+        """Find sets that d-separate X and Y."""
+        edges = self.mutilate(over, under)
+        descendants = get_descendants(edges, self.topological_generations)
+        d_sep = find_d_separators(
+            x, y, edges, self._neighbours, descendants, self._reachable, unobserved
+        )
+        print(d_sep)  # noqa: T201

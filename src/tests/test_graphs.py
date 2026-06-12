@@ -21,6 +21,7 @@ from sim_dags.graphs import (
     conditional_independencies,
     edges_to_nodes,
     find_colliders,
+    find_d_separators,
     find_existing_paths,
     find_minimal_separators,
     find_open_paths,
@@ -35,6 +36,7 @@ from sim_dags.graphs import (
     mutilate,
     path_exists,
     path_has_collider,
+    path_is_closed,
     undirected_path_exists,
 )
 
@@ -607,6 +609,26 @@ def test_find_colliders() -> None:
     assert find_colliders(edges, ["d", "e", "f"]) == set()  # ty:ignore[invalid-argument-type]
 
 
+def test_path_is_closed() -> None:
+    """Test path_is_closed()."""
+    # a <- b -> c <- d -> e
+    # c -> f
+    path = ["a", "b", "c", "d", "e"]
+    colliders = {"c"}
+    descendants = {"c": ["f"]}
+
+    assert path_is_closed(path, set(), colliders, descendants)
+    assert path_is_closed(path, {"b"}, colliders, descendants)
+    assert path_is_closed(path, {"d"}, colliders, descendants)
+    assert path_is_closed(path, {"b", "d"}, colliders, descendants)
+    assert not path_is_closed(path, {"c"}, colliders, descendants)
+    assert not path_is_closed(path, {"f"}, colliders, descendants)
+    assert not path_is_closed(path, {"c", "f"}, colliders, descendants)
+
+    # open path should not be closed by empty set
+    assert not path_is_closed(["a", "b", "c"], set(), set(), {})
+
+
 def test_find_separators(edges: Edges, descendants: NodeMap) -> None:
     """Test find_separators()."""
     # Testing if no paths leads to empty set
@@ -723,6 +745,62 @@ def test_is_d_separator(
         descendants,
         reachable,
     )
+
+
+def test_find_d_separators_raises(
+    edges: Edges, neighbours: NodeMap, descendants: NodeMap, reachable: NodeMap
+) -> None:
+    """Test if find_d_separators raises the correct exception."""
+    with pytest.raises(NoDisjointSetsError):
+        find_d_separators(
+            {"a", "b"}, {"b", "c"}, edges, neighbours, descendants, reachable, set()
+        )
+
+
+def test_find_d_separators(
+    edges: Edges, neighbours: NodeMap, descendants: NodeMap, reachable: NodeMap
+) -> None:
+    """Test find_d_separators()."""
+    correct = [["b", "c"], ["b", "e"], ["c", "d"], ["d", "e"]]
+    d_sep = find_d_separators(
+        {"a"}, {"g"}, edges, neighbours, descendants, reachable, set()
+    )
+    assert all(c in d_sep.separators for c in correct)
+    assert d_sep.separators != d_sep.minimal
+    assert isinstance(repr(d_sep), str)
+
+    d_sep = find_d_separators(
+        {"a"}, {"f", "g"}, edges, neighbours, descendants, reachable, set()
+    )
+    assert all(c in d_sep.separators for c in correct)
+    assert d_sep.separators != d_sep.minimal
+    assert isinstance(repr(d_sep), str)
+
+    # removing nodes through unobserved
+    correct = [["c"]]
+    d_sep = find_d_separators(
+        {"a"}, {"e"}, edges, neighbours, descendants, reachable, {"b", "d", "g"}
+    )
+    assert d_sep.minimal == correct
+    assert d_sep.minimal == d_sep.separators
+    assert isinstance(repr(d_sep), str)
+
+    # removing edges through mutilation
+    e = mutilate(edges, over=["b"], under=[])
+    d_sep = find_d_separators(
+        {"a"}, {"e"}, e, neighbours, descendants, reachable, set()
+    )
+    assert d_sep.minimal == correct
+    assert d_sep.minimal == d_sep.separators
+    assert isinstance(repr(d_sep), str)
+
+    # empty if a pair is an edge
+    d_sep = find_d_separators(
+        {"a"}, {"b", "c"}, edges, neighbours, descendants, reachable, set()
+    )
+    assert d_sep.minimal == []
+    assert d_sep.separators == []
+    assert isinstance(repr(d_sep), str)
 
 
 # --- Tests for backdoor criterion

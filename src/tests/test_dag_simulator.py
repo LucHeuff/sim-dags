@@ -127,6 +127,11 @@ def test_is_d_separator(simulator: DAGSimulator) -> None:
     assert not simulator.is_d_separator("x", "w", "y")
 
 
+def test_find_d_separator(simulator: DAGSimulator) -> None:
+    """Test find_d_separators()."""
+    simulator.find_d_separators("x", "y")
+
+
 def test_dagitty_code(simulator: DAGSimulator) -> None:
     """Test dagitty_code()."""
     simulator.dagitty_code()
