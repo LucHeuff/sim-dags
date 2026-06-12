@@ -6,7 +6,6 @@ from itertools import combinations, product
 from typing import Literal
 
 from more_itertools import sliding_window
-from networkx import find_minimal_d_separator
 
 from sim_dags.exceptions import (
     MissingNodeError,
