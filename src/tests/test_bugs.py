@@ -135,3 +135,32 @@ def test_realistic_dag() -> None:
     )
     assert cond.testable == correct, "Incorrect independencies"
     assert cond.untestable == [], "Should be no untestable dependencies"
+
+
+def test_d_sep_bug() -> None:
+    """Test a bug with is_d_separator()."""
+    distributions = [
+        Binomial("Va"),
+        Binomial("Vg"),
+        Binomial("Vi"),
+        Binomial("Vl"),
+        Binomial("Vo"),
+        Binomial("Vs"),
+        Binomial("Vt"),
+        Binomial("C"),
+        Binomial("G", ["C", "Vg"]),
+        Binomial("L", ["C", "Vl"]),
+        Binomial("A", ["C", "Va"]),
+        Binomial("T", ["G", "Vt"]),
+        Binomial("O", ["G", "T", "Vo"]),
+        Binomial("M", ["G", "L", "O", "A"], unobserved=True),
+        Binomial("D", ["T", "O", "M", "G"], unobserved=True),
+        Binomial("S", ["T", "D", "Vs"]),
+        Binomial("I", ["C", "G", "L", "T", "O", "S", "A"]),
+        Binomial("N", ["I", "D"]),
+    ]
+    dag = DAGSimulator(distributions)
+
+    assert dag.is_d_separator("D", "Vg", {"A", "G", "L"}), (
+        "Incorrect d-separator judgment"
+    )
