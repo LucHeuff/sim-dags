@@ -25,7 +25,7 @@ def do_uniform(categories: int, size: int, rng: np.random.Generator) -> np.ndarr
     counts = np.full(categories, size // categories)
     # rounded down, so might need to add on remainder
     counts[: size % categories] += 1
-    assert (s := sum(counts)) == size, f"SUm adds to {s}, not {size}"
+    assert (s := sum(counts)) == size, f"Sum adds to {s}, not {size}"
 
     samples = np.repeat(values, counts)
     rng.shuffle(samples)
