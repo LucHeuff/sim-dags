@@ -1,11 +1,12 @@
 from collections import deque
 from collections.abc import Iterable, Sized
 from dataclasses import dataclass
-from functools import reduce
+from functools import partial, reduce
 from itertools import combinations, product
 from typing import Literal
 
 from more_itertools import sliding_window
+from tqdm.contrib.concurrent import process_map
 
 from sim_dags.exceptions import (
     MissingNodeError,
@@ -602,6 +603,64 @@ class ConditionalIndependecies:
         return f"{self.render_testable(do_msg)}\n{self.render_untestable(do_msg)}"
 
 
+# ---- Object and function for multiprocessing in conditional_independencies
+
+
+@dataclass
+class DSep:
+    """Container for d-separation results."""
+
+    left: Node
+    right: Node
+    d_separators: list[NodeSequence] | None
+    minimal_d_separators: list[NodeSequence] | None
+
+
+def find(
+    pair: tuple[Node, Node],
+    nodes: set[Node],
+    edges: Edges,
+    isolated: set[Node],
+    unobserved: set[Node],
+    neighbours: NodeMap,
+    reachable: NodeMap,
+    descendants: NodeMap,
+    *,
+    testable_only: bool,
+) -> DSep:
+    """Find d-separators for this pair of nodes."""
+    left, right = pair
+    # If nodes are neighbours, there cannot be a d-separating set
+    if left in neighbours[right]:
+        return DSep(left, right, None, None)
+    # if any of the two nodes is isolated, then the empty set d-separates them
+    if bool({left, right} & isolated):
+        return DSep(left, right, [], [])
+
+    # figuring out d-separators for this pair
+    simple_paths = all_simple_paths(left, right, neighbours, reachable)
+    existing_paths = find_existing_paths(edges, simple_paths)
+    exclude = {left, right}
+    # When only looking at testable independencies, can remove unobserved
+    # from available.
+    # This can speed up find_separators as it has to check fewer combinations
+    if testable_only:
+        exclude |= unobserved
+    available = find_available(nodes, existing_paths, exclude)
+
+    d_separators = find_separators(available, edges, existing_paths, descendants)
+
+    # if find_separators returns an empty list,
+    # then there are no conditional independencies.
+    if not bool(d_separators):
+        return DSep(left, right, None, None)
+
+    # finding minimal separators as well
+    minimal_d_separators = find_minimal_separators(d_separators)
+
+    return DSep(left, right, d_separators, minimal_d_separators)
+
+
 def conditional_independencies(
     topological_sort: NodeSequence,
     edges: Edges,
@@ -612,6 +671,7 @@ def conditional_independencies(
     reachable: NodeMap,
     *,
     testable_only: bool,
+    max_cores: int,
 ) -> ConditionalIndependecies:
     """Find all conditional independencies implied by this graph."""
     # Depending on the show option, not all nodes are relevant
@@ -637,7 +697,7 @@ def conditional_independencies(
         else:
             testable.append(r(left, right, d_sep))
 
-    nodes = set(topological_sort)
+    nodes: set[Node] = set(topological_sort)
     relevant = nodes - ignore - unobserved if testable_only else nodes - ignore
 
     # isolated nodes are always independent of any other node.
@@ -646,33 +706,32 @@ def conditional_independencies(
 
     order = [node for node in topological_sort if node in relevant]
 
-    for left, right in combinations(order, 2):
-        # skipping if the nodes are direct neighbours
-        if left in neighbours[right]:
-            continue
-        # if any of the two nodes is isolated, immediately add the pair
-        if bool({left, right} & isolated):
-            update(left, right, [])
-            continue
+    # Calculating conditional independencies using multiprocessing
+    # Otherwise this might take a while with large DAGs.
+    comb = list(combinations(order, 2))
+    find_ = partial(
+        find,
+        nodes=nodes,
+        edges=edges,
+        isolated=isolated,
+        unobserved=unobserved,
+        neighbours=neighbours,
+        reachable=reachable,
+        descendants=descendants,
+        testable_only=testable_only,
+    )
 
-        # figuring out d-separators for this pair
-        simple_paths = all_simple_paths(left, right, neighbours, reachable)
-        existing_paths = find_existing_paths(edges, simple_paths)
-        exclude = {left, right}
-        # When only looking at testable independencies, can remove unobserved
-        # from available.
-        # This can speed up find_separators as it has to check fewer combinations
-        if testable_only:
-            exclude |= unobserved
-        available = find_available(nodes, existing_paths, exclude)
+    result = process_map(find_, comb, max_workers=max_cores, leave=False)
 
-        d_separators = find_separators(available, edges, existing_paths, descendants)
-        minimal_d_separators = find_minimal_separators(d_separators)
-
-        # skipping if d_separators is the empty list -> no conditional independencies
-        if bool(minimal_d_separators):
-            for d_sep in sorted(minimal_d_separators):
-                update(left, right, sorted(d_sep))
+    for dsep in result:
+        if dsep.d_separators is not None:
+            # if d_separators is the empty list, add these immediately
+            if not bool(dsep.d_separators):
+                update(dsep.left, dsep.right, [])
+            # otherwise, iterate over all the minimal d-separators
+            else:
+                for _dsep in sorted(dsep.minimal_d_separators):
+                    update(dsep.left, dsep.right, sorted(_dsep))
 
     return ConditionalIndependecies(testable, untestable)
 
@@ -771,6 +830,7 @@ class DirectedAcyclicGraph:
         under: NodeSequence | None,
         ignore: set[str],
         unobserved: set[str],
+        max_cores: int,
         show: CIOptions = "testable",
     ) -> None:
         """Display conditional independencies."""
@@ -786,6 +846,7 @@ class DirectedAcyclicGraph:
             descendants,
             self._reachable,
             testable_only=testable_only,
+            max_cores=max_cores,
         )
 
         do_msg = self._parse_do(over)

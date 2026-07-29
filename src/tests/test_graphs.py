@@ -1,5 +1,6 @@
 from collections.abc import Sized
 from dataclasses import dataclass
+from functools import partial
 
 import hypothesis.strategies as st
 import networkx as nx
@@ -12,6 +13,7 @@ from sim_dags.exceptions import (
 )
 from sim_dags.graphs import (
     DirectedAcyclicGraph,
+    DSep,
     Edges,
     Node,
     NodeMap,
@@ -20,6 +22,7 @@ from sim_dags.graphs import (
     backdoor_criterion,
     conditional_independencies,
     edges_to_nodes,
+    find,
     find_colliders,
     find_d_separators,
     find_existing_paths,
@@ -930,6 +933,62 @@ def test_backdoor_criterion(pipe: BC, fork: BC, collider: BC) -> None:
 
 
 # ---- Test for conditional independencies
+def test_find(
+    nodes: Sized[Node],
+    edges: Edges,
+    neighbours: NodeMap,
+    reachable: NodeMap,
+    descendants: NodeMap,
+) -> None:
+    """Test find() for multiprocessing."""
+    f = partial(
+        find,
+        nodes=nodes,
+        edges=edges,
+        neighbours=neighbours,
+        reachable=reachable,
+        descendants=descendants,
+    )
+
+    # Testing neighbours
+    result = f(
+        ("a", "b"),
+        isolated=set(),
+        unobserved=set(),
+        testable_only=True,
+    )
+    assert result == DSep("a", "b", None, None)
+
+    # Testing isolated
+    result = f(("a", "e"), isolated={"a"}, unobserved=set(), testable_only=True)
+    assert result == DSep("a", "e", [], [])
+
+    # Testing regular search
+    result = f(("a", "d"), isolated=set(), unobserved=set(), testable_only=True)
+    correct_dsep = [
+        ["b"],
+        ["b", "e"],
+        ["b", "c"],
+        ["b", "e", "g"],
+        ["b", "c", "g"],
+        ["b", "c", "e"],
+        ["b", "c", "e", "g"],
+    ]
+    correct_min = [["b"]]
+    assert result.left == "a"
+    assert result.right == "d"
+    assert result.d_separators is not None
+    assert all(sep in result.d_separators for sep in correct_dsep)
+    assert result.minimal_d_separators == correct_min
+
+    # Testing when find_separators cannot find anything
+    result = f(
+        ("a", "d"),
+        isolated=set(),
+        unobserved={"b", "c", "e", "g"},
+        testable_only=True,
+    )
+    assert result == DSep("a", "d", None, None)
 
 
 def test_conditional_independencies() -> None:
@@ -952,6 +1011,7 @@ def test_conditional_independencies() -> None:
         descendants,
         reachable,
         testable_only=True,
+        max_cores=8,
     )
     all_indep = ["x ⫫ w", "x ⫫ z | y", "w ⫫ y"]
     assert ci.testable == all_indep, "incorrect testable independencies"
@@ -966,6 +1026,7 @@ def test_conditional_independencies() -> None:
         descendants,
         reachable,
         testable_only=False,
+        max_cores=8,
     )
     assert ci.testable == ["x ⫫ w"], "incorrect testable independencies"
     assert ci.untestable == ["x ⫫ z | (y)", "w ⫫ (y)"], (
@@ -981,6 +1042,7 @@ def test_conditional_independencies() -> None:
         descendants,
         reachable,
         testable_only=False,
+        max_cores=8,
     )
     assert ci.testable == ["x ⫫ w"], "incorrect testable independencies"
     assert ci.untestable == ["x ⫫ (z)"], "incorrect untestable independencies"
@@ -1003,6 +1065,7 @@ def test_no_conditional_independencies(pipe: BC) -> None:
         descendants,
         reachable,
         testable_only=False,
+        max_cores=8,
     )
 
     assert isinstance(ci.render(""), str)
@@ -1023,8 +1086,12 @@ def test_directed_acyclic_graph(nodes: set[Node], edges: Edges) -> None:
     dag.backdoor_criterion("a", "g", [], set())
     dag.backdoor_criterion("a", "g", do=["c", "b"], unobserved=set())
 
-    dag.conditional_independencies(None, None, set(), set())
-    dag.conditional_independencies(None, None, set(), set(), show="untestable")
-    dag.conditional_independencies(None, None, set(), set(), show="both")
+    dag.conditional_independencies(None, None, set(), set(), max_cores=8)
+    dag.conditional_independencies(
+        None, None, set(), set(), max_cores=8, show="untestable"
+    )
+    dag.conditional_independencies(
+        None, None, set(), set(), max_cores=8, show="both"
+    )
 
     dag.is_d_separator({"a"}, {"g"}, set(), None, None)

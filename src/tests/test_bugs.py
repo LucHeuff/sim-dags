@@ -109,6 +109,7 @@ def test_realistic_dag() -> None:
         get_descendants(dag.dag.edges, dag.dag.topological_generations),
         dag.dag._reachable,  # noqa: SLF001
         testable_only=True,
+        max_cores=16,
     )
 
     testable_len = len(cond.testable)

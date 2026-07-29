@@ -1,3 +1,4 @@
+import os
 from collections import Counter
 from collections.abc import Sequence
 from functools import cached_property
@@ -19,6 +20,9 @@ from sim_dags.generators import BinomialGenerator, CategoricalGenerator, Generat
 from sim_dags.graph_algorithms import dagitty_code
 from sim_dags.graphs import CIOptions, DirectedAcyclicGraph
 
+# finding the number of cores to use for calculating conditional independencies
+cores = os.cpu_count()
+MAX_CORES = 1 if cores is None else cores // 2
 # ---- Supporting functions
 
 
@@ -209,6 +213,7 @@ class DAGSimulator:
         under: list[str] | None = None,
         ignore: list[str] | None = None,
         show: CIOptions = "testable",
+        max_cores: int = MAX_CORES,
     ) -> None:
         """Display implied conditional independencies for this DAG.
 
@@ -218,6 +223,8 @@ class DAGSimulator:
             ignore (Optional): variables to omit from result.
             show (Optional): which conditional independencies to show.
                  One of 'testable', 'untestable' or 'both'. Defaults to 'testable'
+            max_cores (Optional): number of cores to calculate independencies with.
+                                  Defaults to half the logical cores in the system.
 
         Returns:
             Nothing, but prints conditional independencies to the console.
@@ -234,7 +241,7 @@ class DAGSimulator:
             ignore_ = set()
 
         self.dag.conditional_independencies(
-            over, under, ignore_, self.unobserved, show
+            over, under, ignore_, self.unobserved, max_cores, show
         )
 
     def is_d_separator(
