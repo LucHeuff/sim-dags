@@ -178,6 +178,11 @@ class DAGSimulator:
         """Return list of unobserved nodes."""
         return {d.name for d in self.distributions.values() if d.unobserved}
 
+    @cached_property
+    def variables(self) -> list[str]:
+        """Return a list of variables in the DAG."""
+        return sorted(self.distributions.keys())
+
     def backdoor_criterion(
         self, exposure: str, outcome: str, do: list[str] | None = None
     ) -> None:
@@ -195,8 +200,6 @@ class DAGSimulator:
         self._check_nodes([exposure, outcome])
         if do is not None:
             self._check_nodes(do)
-        else:
-            do = []
 
         self.dag.backdoor_criterion(exposure, outcome, do, self.unobserved)
 
@@ -265,6 +268,8 @@ class DAGSimulator:
         y: str | set[str],
         over: list[str] | None = None,
         under: list[str] | None = None,
+        *,
+        include_unobserved: bool = False,
     ) -> None:
         """Find sets that d-separate x and y.
 
@@ -273,6 +278,7 @@ class DAGSimulator:
             y: node or set of nodes
             over (Optional): all arrows pointing into these nodes are removed
             under (Optional): all arrows pointing out of these nodes are removed
+            include_unobserved (Optional): include unobserved variables in search
 
         Returns:
             nothing, but prints d-separating sets if any exist.
@@ -281,7 +287,9 @@ class DAGSimulator:
         x = {x} if not isinstance(x, set) else x
         y = {y} if not isinstance(y, set) else y
 
-        self.dag.find_d_separators(x, y, self.unobserved, over, under)
+        unobserved = set() if include_unobserved else self.unobserved
+
+        self.dag.find_d_separators(x, y, unobserved, over, under)
 
     def dagitty_code(
         self, over: list[str] | None = None, under: list[str] | None = None

@@ -631,9 +631,20 @@ def test_path_is_closed() -> None:
 
 def test_find_separators(edges: Edges, descendants: NodeMap) -> None:
     """Test find_separators()."""
-    # Testing if no paths leads to empty set
-    assert find_separators({"a", "b", "c"}, edges, [], descendants) == [[]], (
-        "no empty set on empty paths"
+    # Testing if no paths leads to all permutations of available
+    all_combinations = [
+        [],
+        ["a"],
+        ["b"],
+        ["c"],
+        ["a", "b"],
+        ["a", "c"],
+        ["b", "c"],
+        ["a", "b", "c"],
+    ]
+    test_sep = find_separators({"a", "b", "c"}, edges, [], descendants)
+    assert all(c in test_sep for c in all_combinations), (
+        "Empty paths should lead to all combinations of {a, b, c}"
     )
     # Testing if empty list is return when one of the paths is an edge
     assert (
@@ -762,37 +773,55 @@ def test_find_d_separators(
 ) -> None:
     """Test find_d_separators()."""
     correct = [["b", "c"], ["b", "e"], ["c", "d"], ["d", "e"]]
-    d_sep = find_d_separators(
-        {"a"}, {"g"}, edges, neighbours, descendants, reachable, set()
-    )
+    x = {"a"}
+    y = {"g"}
+    d_sep = find_d_separators(x, y, edges, neighbours, descendants, reachable, set())
     assert all(c in d_sep.separators for c in correct)
     assert d_sep.separators != d_sep.minimal
     assert isinstance(repr(d_sep), str)
+    assert all(
+        is_d_separator(x, y, set(z), edges, neighbours, descendants, reachable)
+        for z in d_sep.separators
+    )
 
-    d_sep = find_d_separators(
-        {"a"}, {"f", "g"}, edges, neighbours, descendants, reachable, set()
-    )
+    x = {"a"}
+    y = {"f", "g"}
+    d_sep = find_d_separators(x, y, edges, neighbours, descendants, reachable, set())
     assert all(c in d_sep.separators for c in correct)
     assert d_sep.separators != d_sep.minimal
     assert isinstance(repr(d_sep), str)
+    assert all(
+        is_d_separator(x, y, set(z), edges, neighbours, descendants, reachable)
+        for z in d_sep.separators
+    )
 
     # removing nodes through unobserved
     correct = [["c"]]
+    x = {"a"}
+    y = {"e"}
     d_sep = find_d_separators(
-        {"a"}, {"e"}, edges, neighbours, descendants, reachable, {"b", "d", "g"}
+        x, y, edges, neighbours, descendants, reachable, {"b", "d", "g"}
     )
     assert d_sep.minimal == correct
     assert d_sep.minimal == d_sep.separators
     assert isinstance(repr(d_sep), str)
+    assert all(
+        is_d_separator(x, y, set(z), edges, neighbours, descendants, reachable)
+        for z in d_sep.separators
+    )
 
     # removing edges through mutilation
     e = mutilate(edges, over=["b"], under=[])
-    d_sep = find_d_separators(
-        {"a"}, {"e"}, e, neighbours, descendants, reachable, set()
-    )
+    x = {"a"}
+    y = {"e"}
+    d_sep = find_d_separators(x, y, e, neighbours, descendants, reachable, set())
     assert d_sep.minimal == correct
     assert d_sep.minimal == d_sep.separators
     assert isinstance(repr(d_sep), str)
+    assert all(
+        is_d_separator(x, y, set(z), e, neighbours, descendants, reachable)
+        for z in d_sep.separators
+    )
 
     # empty if a pair is an edge
     d_sep = find_d_separators(
@@ -801,6 +830,10 @@ def test_find_d_separators(
     assert d_sep.minimal == []
     assert d_sep.separators == []
     assert isinstance(repr(d_sep), str)
+    assert all(
+        is_d_separator(x, y, set(z), edges, neighbours, descendants, reachable)
+        for z in d_sep.separators
+    )
 
 
 # --- Tests for backdoor criterion

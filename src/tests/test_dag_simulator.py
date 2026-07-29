@@ -137,6 +137,11 @@ def test_dagitty_code(simulator: DAGSimulator) -> None:
     simulator.dagitty_code()
 
 
+def test_variables(simulator: DAGSimulator) -> None:
+    """Test variables property."""
+    assert simulator.variables == ["u1", "u2", "w", "x", "y", "z"]
+
+
 def test_dag_simulator_raises_invalid_do_error(simulator: DAGSimulator) -> None:
     """Test if DAGSimulator raises InvalidDoValueError."""
     with pytest.raises(InvalidDoValueError):

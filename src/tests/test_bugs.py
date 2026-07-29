@@ -5,6 +5,7 @@ from sim_dags.graphs import (
     all_simple_paths,
     backdoor_criterion,
     conditional_independencies,
+    find_d_separators,
     find_existing_paths,
     get_descendants,
 )
@@ -99,7 +100,6 @@ def test_realistic_dag() -> None:
         "Incorrect minimal_adjustment set found."
     )
 
-    # WTF ordering effect? Hoe dan?
     cond = conditional_independencies(
         dag.dag.topological_sort,
         dag.dag.edges,
@@ -156,11 +156,34 @@ def test_d_sep_bug() -> None:
         Binomial("M", ["G", "L", "O", "A"], unobserved=True),
         Binomial("D", ["T", "O", "M", "G"], unobserved=True),
         Binomial("S", ["T", "D", "Vs"]),
-        Binomial("I", ["C", "G", "L", "T", "O", "S", "A"]),
+        Binomial("I", ["C", "G", "L", "T", "O", "S", "A", "Vi"]),
         Binomial("N", ["I", "D"]),
     ]
     dag = DAGSimulator(distributions)
 
     assert dag.is_d_separator("D", "Vg", {"A", "G", "L"}), (
         "Incorrect d-separator judgment"
+    )
+    v = {"Va", "Vg", "Vi", "Vl", "Vo", "Vs", "Vt"}
+    correct_set = {"A", "G", "L", "T"}
+    assert dag.is_d_separator("D", v, correct_set, over=["O"]), (
+        "Incorrect d-separator judgement for all V"
+    )
+
+    edges = dag.dag.mutilate(["O"], None)
+    descendants = get_descendants(edges, dag.dag.topological_generations)
+    d_separators = find_d_separators(
+        {"D"},
+        v,
+        edges,
+        dag.dag._neighbours,  # noqa: SLF001
+        descendants,
+        dag.dag._reachable,  # noqa: SLF001
+        dag.unobserved,
+    )
+    assert sorted(correct_set) in d_separators.separators, (
+        "Correct d-separator doesn't appear in separators"
+    )
+    assert sorted(correct_set) in d_separators.minimal, (
+        "Correct d-separator doesn't appear in minimal set"
     )

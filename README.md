@@ -53,6 +53,8 @@ The `DAGSimulator` also provides the following convenience methods:
 - `mutilate(over, under)` returns a `nx.DiGraph` under mutilations, where `over` removes arrows pointing at these variables, and `under` removes arrows coming out of these variables.
 - `is_d_separator(x, y, z, over, under)` allows testing if `z` d-separates `x` from `y`, optionally under mutilations `over` and `under`.
 - `dagitty_code(over, under)` prints the graph in the [Dagitty](dagitty.net/dags.html) code format, optionally under mutilations `over` and `under`.
+- `variables` this property returns a list of all variables in the DAG.
+- `unobserved` this property returns a list of all unobserved variables in the DAG.
 
 See the docstrings or `help()` for more specifics on these functions.
 

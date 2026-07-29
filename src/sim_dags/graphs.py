@@ -236,6 +236,17 @@ def find_colliders(edges: Edges, path: NodeSequence) -> set[Node]:
     return {node for node in path if is_collider(node, path, edges)}
 
 
+def find_available(
+    nodes: set[Node], paths: list[NodeSequence], exclude: set[Node]
+) -> set[Node]:
+    """Find available nodes given edges and paths, with some nodes excluded."""
+    available = (
+        nodes if not bool(paths) else {node for path in paths for node in path}
+    )
+
+    return available - exclude
+
+
 def path_is_closed(
     path: NodeSequence,
     z: set[Node],
@@ -276,10 +287,15 @@ def find_separators(
     paths: list[NodeSequence],
     descendants: NodeMap,
 ) -> list[NodeSequence]:
-    """Find d-separating sets: subsets of nodes that close all paths."""
-    # if there are no paths, return the empty set
+    """Find all d-separating sets: subsets of nodes that close all paths."""
+    # if there are no paths, all possible combinations of available are d-separators
     if not bool(paths):
-        return [[]]
+        # including the empty set in this case.
+        return [
+            sorted(c)
+            for i in range(len(available) + 1)
+            for c in combinations(available, i)
+        ]
 
     # if any of the paths is a direct edge, then there are no d-eseparators
     if any(len(path) == 2 for path in paths):  # noqa: PLR2004
@@ -289,16 +305,12 @@ def find_separators(
     collider_map = {tuple(path): find_colliders(edges, path) for path in paths}
 
     d_sep = []
-    # Finding a list of nodes that never appear as a collider on any path
-    # These can trivialy be added to a valid d-separating set, which speeds
-    # up the search a bit
 
     # iterating over all possible combinations of nodes
     for i in range(len(available) + 1):
         # i = 0 also tests the empty set
         for c in combinations(available, i):
             z = set(c)
-            # Can skip this combination if it already appears in d-separators
             if all(
                 path_is_closed(path, z, collider_map[tuple(path)], descendants)
                 for path in paths
@@ -401,7 +413,9 @@ class DSeparators:
         if len(self.minimal) == len(self.separators):
             return "D-separating sets:" + self.render_sets(self.minimal)
         min_ = "Minimal d-separating sets:" + self.render_sets(self.minimal)
-        all_ = "All d-separating sets:" + self.render_sets(self.separators)
+        all_ = "All d-separating sets:" + self.render_sets(
+            sorted(self.separators, key=len)  # ty:ignore[invalid-argument-type]
+        )
 
         return f"D-separating sets:\n{min_}\n{all_}"
 
@@ -426,28 +440,28 @@ def find_d_separators(
     if any(pair in edges for pair in pairs):
         return DSeparators([], [])
 
+    # Determining which nodes are in these edges
+    nodes = edges_to_nodes(edges)
+
     # keeping a list of set of d-separating sets.
     all_separators = []
 
     for u, v in pairs:
         all_paths = all_simple_paths(u, v, neighbours, reachable)
         paths = find_existing_paths(edges, all_paths)
-        available = {
-            node
-            for path in paths
-            for node in path
-            if node not in unobserved | {u, v}
-        }
+        available = find_available(nodes, paths, unobserved | {u, v})
         separators = {
-            tuple(sep)
+            frozenset(sep)
             for sep in find_separators(available, edges, paths, descendants)
         }
         all_separators.append(separators)
 
-    # We now have a list of sets of d-separators for each pair
-    # Now we need to find out which d-separators all of these sets have in common.
+    # all_separators is now a list of lists, with each inner list containing
+    # the d-separating sets for each pair.
 
-    d_sep = [list(sep) for sep in reduce(lambda u, v: u & v, all_separators)]
+    # Now we have to figure out which of these sets appear in every list.
+
+    d_sep = [sorted(sep) for sep in reduce(lambda u, v: u & v, all_separators)]
 
     minimal = find_minimal_separators(d_sep)
 
@@ -536,12 +550,9 @@ def backdoor_criterion(
     # --- Finding adjustment sets.
     # Candidates are observed nodes that are not the exposure or the outcome.
 
-    available = {
-        node
-        for path in backdoor_paths
-        for node in path
-        if node not in unobserved | {exposure, outcome}
-    }
+    available = find_available(
+        edges_to_nodes(edges), backdoor_paths, unobserved | {exposure, outcome}
+    )
 
     # adjustment sets consist of combinations of nodes that close all open paths
     adjustment_sets = find_separators(available, edges, backdoor_paths, descendants)
@@ -647,17 +658,13 @@ def conditional_independencies(
         # figuring out d-separators for this pair
         simple_paths = all_simple_paths(left, right, neighbours, reachable)
         existing_paths = find_existing_paths(edges, simple_paths)
-        available = {
-            node
-            for path in existing_paths
-            for node in path
-            if node not in {left, right}
-        }
+        exclude = {left, right}
         # When only looking at testable independencies, can remove unobserved
         # from available.
         # This can speed up find_separators as it has to check fewer combinations
         if testable_only:
-            available -= unobserved
+            exclude |= unobserved
+        available = find_available(nodes, existing_paths, exclude)
 
         d_separators = find_separators(available, edges, existing_paths, descendants)
         minimal_d_separators = find_minimal_separators(d_separators)
@@ -725,7 +732,7 @@ class DirectedAcyclicGraph:
         self,
         exposure: Node,
         outcome: Node,
-        do: NodeSequence,
+        do: NodeSequence | None,
         unobserved: set[Node],
     ) -> None:
         """Display adjustment sets for exposure -> outcome."""
@@ -749,7 +756,7 @@ class DirectedAcyclicGraph:
             )
 
         # Adding the interventions
-        msg = f"Causal effect of {exposure} -> {outcome} {do_msg}:\n"
+        msg = f"Causal effect of {exposure} -> {outcome}{do_msg}:\n"
 
         descendants = get_descendants(edges, self.topological_generations)
 
@@ -826,4 +833,5 @@ class DirectedAcyclicGraph:
         d_sep = find_d_separators(
             x, y, edges, self._neighbours, descendants, self._reachable, unobserved
         )
+        print(f"Sets d-separating {x} and {y}:")  # noqa: T201
         print(d_sep)  # noqa: T201
