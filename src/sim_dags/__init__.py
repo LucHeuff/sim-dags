@@ -7,6 +7,7 @@ from sim_dags.iterate_sims import (
     plot_simulations,
 )
 from sim_dags.probability import (
+    check_conditional_independence,
     p,
     p_array,
 )

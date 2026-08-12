@@ -67,7 +67,6 @@ def _count(data: pl.DataFrame, q: QueryParts) -> pl.DataFrame:
         data.group_by(q.variables)
         .agg(_k=pl.len())
         .with_columns(_n=pl.col("_k").sum().over(q.given))
-        # .unique()
     )
 
 
@@ -273,3 +272,48 @@ def p_distribution(
     """
     q = _parse_query(data, query, name)
     return _p_dist(data, q, steps, prior)
+
+
+# ---- Function that checks for conditional independence
+
+
+def check_conditional_independence(
+    data: pl.DataFrame, x: str, y: str, z: str, alpha: float = 0.05
+) -> bool:
+    """Check for conditional independence using Conditional Mutual Information.
+
+    References:
+        https://en.wikipedia.org/wiki/Conditional_mutual_information
+        https://en.wikipedia.org/wiki/G-test
+
+    Args:
+        data: dataset from which the conditional independence is to be checked.
+        x: representing X in X ⫫ Y | Z
+        y: representing Y in X ⫫ Y | Z
+        z: representing Z in X ⫫ Y | Z. If multiple variables, express as "A,B,C" etc.
+        alpha: critical value for χ² critical value
+
+    Returns:
+        boolean indicating if conditional independence holds in data.
+
+    """  # noqa: E501
+    pxyz = p_array(data, f"{x},{y},{z}")
+    pxy_z = p_array(data, f"{x},{y}|{z}")
+    px_z = p_array(data, f"{x}|{z}")
+    py_z = p_array(data, f"{y}|{z}")
+
+    # Conditional Mutual information term: Σx,y,z P(x,y,z)log(P(x,y|z)/P(x|z)P(y|z))
+    ratio = pxy_z / (px_z * py_z)
+    # masking cases where ration = 0, avoiding warnings from np.log
+    cmi = (pxyz * np.log(ratio.where(ratio > 0))).sum().item()
+
+    # G-test for likelihood ratio
+    nx = p_array(data, x).size
+    ny = p_array(data, y).size
+    nz = p_array(data, z).size
+    dof = (nx - 1) * (ny - 1) * nz
+
+    test_statistic = 2 * len(data) * cmi
+    critical_value = stats.chi2.ppf(1 - alpha, dof)
+
+    return (test_statistic <= critical_value).item()

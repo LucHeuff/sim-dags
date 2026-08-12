@@ -19,6 +19,7 @@ from sim_dags.probability import (
     _get_name,
     _parse_query,
     _permutations,
+    check_conditional_independence,
     p,
     p_array,
     p_distribution,
@@ -299,3 +300,82 @@ def test_p_distribution(density_strategy: DensityStrategy) -> None:
 
     assert_equal(get_p("y|x"), s.py_x)
     assert_equal(get_p("y|x,z"), s.py_xz)
+
+
+# ---- Testing conditional independence check
+
+
+@dataclass
+class ConditionalIndependenceStrategy:
+    """Container for conditional independence strategy."""
+
+    seed: int
+    data: pl.DataFrame
+
+
+def fork(seed: int, size: int) -> pl.DataFrame:
+    """Sample from X <- Z -> Y."""
+    rng = np.random.default_rng(seed)
+
+    nx = rng.choice(np.arange(2, 6))
+    ny = rng.choice(np.arange(2, 6))
+    nz = rng.choice(np.arange(2, 6))
+
+    pz = rng.dirichlet(np.repeat(1, nz))
+    px_z = rng.dirichlet(np.repeat(1, nx), size=nz)
+    py_z = rng.dirichlet(np.repeat(1, ny), size=nz)
+
+    z = rng.multinomial(1, pvals=pz, size=size).argmax(axis=1)
+    x = rng.multinomial(1, pvals=px_z[z]).argmax(axis=1)
+    y = rng.multinomial(1, pvals=py_z[z]).argmax(axis=1)
+
+    return pl.DataFrame({"x": x, "y": y, "z": z})
+
+
+def collider(seed: int, size: int) -> pl.DataFrame:
+    """Sample from X <- Z -> Y."""
+    rng = np.random.default_rng(seed)
+
+    nx = rng.choice(np.arange(2, 6))
+    ny = rng.choice(np.arange(2, 6))
+    nz = rng.choice(np.arange(2, 6))
+
+    pz_xy = rng.dirichlet(np.repeat(1, nz), size=(nx, ny))
+    px = rng.dirichlet(np.repeat(1, nx))
+    py = rng.dirichlet(np.repeat(1, ny))
+
+    x = rng.multinomial(1, pvals=px, size=size).argmax(axis=1)
+    y = rng.multinomial(1, pvals=py, size=size).argmax(axis=1)
+    z = rng.multinomial(1, pvals=pz_xy[x, y]).argmax(axis=1)
+
+    return pl.DataFrame({"x": x, "y": y, "z": z}).sort(["x", "y", "z"])
+
+
+def test_check_conditional_independence_fork() -> None:
+    """Test check_conditional_independence() with Fork."""
+    alpha = 0.05
+    size = 1000
+    seed = 12345
+    n = 25
+
+    results = [
+        check_conditional_independence(fork(s, size), "x", "y", "z")
+        for s in range(seed, seed + n + 1)
+    ]
+
+    assert 1 - (sum(results) / n) <= alpha
+
+
+def test_check_conditional_independence_collider() -> None:
+    """Test check_conditional_independence() with Collider."""
+    alpha = 0.05
+    size = 1000
+    seed = 12345
+    n = 25
+
+    results = [
+        check_conditional_independence(collider(s, size), "x", "y", "z")
+        for s in range(seed, seed + n + 1)
+    ]
+
+    assert not 1 - (sum(results) / n) <= alpha

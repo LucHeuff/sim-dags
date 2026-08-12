@@ -134,3 +134,9 @@ This is what the `p` and `p_array` functions are for. These both calculate (cond
 
 To convert `xarray.DataArray` into `polars.DataFrame`, the `to_df` convenience function is provided.
 
+To test for conditional independence, you can use `check_conditional_independence` which returns a boolean. This function has the following signature:
+- `data`: a `polars.DataFrame` on which conditional independence is to be tested
+- `x`, `y` and `z`: respectively representing the variables in X ⫫ Y | Z, represented as strings. If you want to include more variables, they must be comma separated, e.g. `z="C,D"`
+- `alpha` Optionally allows setting the critical value for the test statistic, defaults to 0.05.
+
+
